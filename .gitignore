@@ -1,0 +1,8 @@
+# Ignore the Python virtual environment
+.venv/
+
+# Ignore the output directory
+Output/
+
+# Ignore Python cache
+__pycache__/
