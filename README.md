@@ -13,3 +13,54 @@ The plan for the file structure...
 .\scripts\***.py (other scripts for program).
 .\data\temporary.json
 ```
+
+### Woo Installer
+```
+ Removing old virtual environment...
+Running installer...
+
+Deleting previous virtual-environment ...
+
+Creating virtual-environment ...
+  C:\Users\MaStar\AppData\Local\Programs\Python\Python311\python.exe -m venv .ve
+nv
+
+Upgrading pip ...
+  .venv\Scripts\python.exe -m pip install --upgrade pip
+Requirement already satisfied: pip in c:\program_files\geforce-hybrid-capture\.v
+env\lib\site-packages (22.3)
+Collecting pip
+  Using cached pip-25.3-py3-none-any.whl (1.8 MB)
+Installing collected packages: pip
+  Attempting uninstall: pip
+    Found existing installation: pip 22.3
+    Uninstalling pip-22.3:
+      Successfully uninstalled pip-22.3
+Successfully installed pip-25.3
+
+Installing Python packages ...
+  .venv\Scripts\python.exe -m pip install --prefer-binary av>=12.0.0
+Collecting av>=12.0.0
+  Downloading av-16.0.1-cp311-cp311-win_amd64.whl.metadata (4.7 kB)
+Downloading av-16.0.1-cp311-cp311-win_amd64.whl (32.3 MB)
+   ---------------------------------------- 32.3/32.3 MB 442.4 kB/s  0:01:14
+Installing collected packages: av
+Successfully installed av-16.0.1
+  ensured Output
+  ensured data
+  ensured scripts
+  wrote data\configuration.json
+
+============================================================
+INSTALLATION SUMMARY
+============================================================
+  .venv\Scripts\python.exe -m pip show av
+  V  av installed
+
+  V  All packages installed successfully.
+============================================================
+
+Fresh install complete - press ENTER to return to menu.
+
+
+```
