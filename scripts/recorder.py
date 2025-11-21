@@ -1,10 +1,13 @@
 # scripts/recorder.py - Core recording functionality using ctypes to interface
 # with NVIDIA's NvFBC API.  Updated for driver 399.07 (uses NvFBCCreateEx).
+# FALL-BACK: if NvFBCPlugin.dll is missing we grab the desktop with d3dshot
+# and feed the same BGRA frame into PyAV + NVENC.
 
 import ctypes
 import os
 import threading
 import time
+import numpy as np  # <- needed for fast numpy-array wrapper
 from ctypes import c_void_p, c_int, c_uint32, POINTER, Structure
 import av
 
@@ -90,6 +93,7 @@ def find_nvfbc_dll():
 
 
 # ---------- Function prototypes ----------
+nvfbc = None
 if WinDLL:
     try:
         dll_path = find_nvfbc_dll()
@@ -128,18 +132,19 @@ if WinDLL:
         _NvFBCCaptureFrame.restype = c_int
 
     except OSError:
-        WinDLL = None
+        nvfbc = None
 
 # ---------- Globals ----------
 session_handle = c_void_p()
 is_capturing = False
 capture_thread = None
+NVFBC_AVAILABLE = bool(nvfbc)  # simple flag
 
 
 # ---------- API helpers ----------
 def init_nvidia_apis():
     global session_handle
-    if not WinDLL:
+    if not NVFBC_AVAILABLE:
         print("NvFBC not available on this system.")
         return False
 
@@ -158,6 +163,44 @@ def init_nvidia_apis():
     return True
 
 
+# ---------- frame-grab helpers ----------
+def grab_frame_nvfbc(width: int, height: int):
+    """Return BGRA numpy array (H,W,4) or None if grab failed."""
+    grab_params = NVFBC_GRAB_FRAME_PARAMS()
+    grab_params.dwVersion = NVFBC_API_VERSION
+    grab_params.dwFlags = NVFBC_GRAB_FRAME_FLAGS_NO_WAIT
+
+    frame_info = NVFBC_FRAME_GRAB_INFO()
+    frame_info.dwVersion = NVFBC_API_VERSION
+    grab_params.pFrameGrabInfo = ctypes.byref(frame_info)
+
+    status = _NvFBCCaptureFrame(session_handle, ctypes.byref(grab_params))
+    if status != NVFBC_SUCCESS:
+        return None
+
+    data = ctypes.string_at(frame_info.pFrameBuffer, frame_info.dwByteSize)
+    return np.frombuffer(data, dtype=np.uint8).reshape((height, width, 4))
+
+
+def grab_frame_d3dshot(width: int, height: int):
+    """BGRA numpy array via Desktop Duplication (d3dshot)."""
+    import d3dshot
+
+    if not hasattr(grab_frame_d3dshot, "d"):
+        grab_frame_d3dshot.d = d3dshot.create(capture_output="numpy")
+        grab_frame_d3dshot.d.capture(target_fps=60)
+
+    frame = grab_frame_d3dshot.d.get_latest_frame()
+    if frame is None:
+        return None
+    # ensure correct shape
+    if frame.shape[2] == 4:
+        return frame
+    if frame.shape[2] == 3:
+        return np.dstack([frame, np.full(frame.shape[:2], 255, dtype=np.uint8)])
+    raise RuntimeError("Unexpected frame format")
+
+
 # ---------- Capture loop ----------
 def capture_loop(config):
     global is_capturing
@@ -166,38 +209,28 @@ def capture_loop(config):
         config["output_path"], f"capture-{int(time.time())}.mp4"
     )
 
+    # choose grabber once
+    grab_frame = grab_frame_nvfbc if NVFBC_AVAILABLE else grab_frame_d3dshot
+    w, h = config["resolution"]["width"], config["resolution"]["height"]
+
     with av.open(output_filename, mode="w") as container:
         stream = container.add_stream(config["codec"], rate=config["fps"])
-        stream.width = config["resolution"]["width"]
-        stream.height = config["resolution"]["height"]
+        stream.width, stream.height = w, h
         stream.pix_fmt = "yuv420p"
 
         while is_capturing:
-            grab_params = NVFBC_GRAB_FRAME_PARAMS()
-            grab_params.dwVersion = NVFBC_API_VERSION
-            grab_params.dwFlags = NVFBC_GRAB_FRAME_FLAGS_NO_WAIT
+            frame_bgra = grab_frame(w, h)
+            if frame_bgra is None:
+                time.sleep(0.001)
+                continue
 
-            frame_info = NVFBC_FRAME_GRAB_INFO()
-            frame_info.dwVersion = NVFBC_API_VERSION
-            grab_params.pFrameGrabInfo = ctypes.byref(frame_info)
-
-            status = _NvFBCCaptureFrame(session_handle, ctypes.byref(grab_params))
-            if status == NVFBC_SUCCESS:
-                frame_data = ctypes.string_at(
-                    frame_info.pFrameBuffer, frame_info.dwByteSize
-                )
-                frame = av.VideoFrame.from_buffer(
-                    frame_data,
-                    width=stream.width,
-                    height=stream.height,
-                    format="bgra",
-                )
-                for packet in stream.encode(frame):
-                    container.mux(packet)
+            av_frame = av.VideoFrame.from_ndarray(frame_bgra, format="bgra")
+            for packet in stream.encode(av_frame):
+                container.mux(packet)
 
             time.sleep(1.0 / config["fps"])
 
-        # flush
+        # flush encoder
         for packet in stream.encode():
             container.mux(packet)
 
@@ -205,8 +238,15 @@ def capture_loop(config):
 # ---------- Session control ----------
 def start_capture(config):
     global is_capturing, capture_thread
-    if not session_handle:
+    if not session_handle and NVFBC_AVAILABLE:
         print("NvFBC instance not created.")
+        return
+    if not NVFBC_AVAILABLE:
+        # d3dshot path needs no session
+        is_capturing = True
+        capture_thread = threading.Thread(target=capture_loop, args=(config,))
+        capture_thread.start()
+        print("Capture thread started (Desktop Duplication).")
         return
 
     params = NVFBC_CREATE_CAPTURE_SESSION_PARAMS()
@@ -231,6 +271,12 @@ def start_capture(config):
 
 def stop_capture():
     global is_capturing, capture_thread
+    if not NVFBC_AVAILABLE:
+        if is_capturing:
+            is_capturing = False
+            capture_thread.join()
+        print("Desktop-duplication capture stopped.")
+        return
     if not session_handle:
         print("NvFBC instance not created.")
         return
@@ -241,7 +287,6 @@ def stop_capture():
 
     params = NVFBC_DESTROY_CAPTURE_SESSION_PARAMS()
     params.dwVersion = NVFBC_API_VERSION
-
     status = _NvFBCDestroyCaptureSession(session_handle, ctypes.byref(params))
     if status != NVFBC_SUCCESS:
         print(f"Failed to destroy capture session. Status: {status}")
@@ -250,6 +295,9 @@ def stop_capture():
 
 
 def cleanup():
-    if session_handle:
+    if NVFBC_AVAILABLE and session_handle:
         NvFBCDestroyInstance(session_handle)
         print("NvFBC instance destroyed.")
+    if hasattr(grab_frame_d3dshot, "d"):
+        grab_frame_d3dshot.d.stop()
+        print("d3dshot stopped.")
