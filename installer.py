@@ -4,10 +4,11 @@ import os, sys, subprocess, json, platform, shutil
 
 VENV_DIR   = ".venv"
 REQ_LIST   = [
+    "Pillow>=8.3.0",          # <- add this line
     "av>=12.0.0",
-    "d3dshot>=0.1.5",      # Desktop Duplication API screen capture
-    "numpy>=1.21.0",       # Required by d3dshot for optimal performance
-    "comtypes>=1.1.14"     # Required by d3dshot for COM interfaces
+    "d3dshot>=0.1.5",
+    "numpy>=1.21.0",
+    "comtypes>=1.1.14"
 ]
 PY_VER_MIN = (3, 7)
 PY_VER_MAX = (3, 11)                 # 3.12+ warned against
@@ -48,7 +49,20 @@ def upgrade_pip():
 
 def install_requirements():
     print("\nInstalling Python packages ...")
+
+    # 1.  Force a modern Pillow wheel *before* anything else
+    run([python_in_venv(), "-m", "pip", "install", "--upgrade", "--force-reinstall",
+         "--no-deps", "--prefer-binary", "Pillow>=8.3.0,<11"])
+
+    # 2.  Install D3DShot *without* its dependencies so it can't drag Pillow back
+    run([python_in_venv(), "-m", "pip", "install", "--no-deps", "--prefer-binary",
+         "d3dshot>=0.1.5"])
+
+    # 3.  Install everything else (skip Pillow and d3dshot)
     for req in REQ_LIST:
+        pkg_name = req.split(">=")[0].split("==")[0].lower()
+        if pkg_name in ("pillow", "d3dshot"):
+            continue
         run([python_in_venv(), "-m", "pip", "install", "--prefer-binary", req])
 
 def make_dirs():
@@ -114,7 +128,7 @@ def main():
     write_json()
 
     if verify_and_summary():
-        print("\nFresh install complete – press ENTER to return to menu.")
+        print("\nClean install complete – press ENTER to return to menu.")
     else:
         print("\nInstall finished with ERRORS – press ENTER to return.")
     input()
