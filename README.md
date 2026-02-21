@@ -15,15 +15,14 @@ x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~
      .\Output
 
  Recent Files:
+    Desktop_Video_2026_02_21.mp4  (348.8 KB)
     (empty)
     (empty)
     (empty)
     (empty)
-    (empty)
+
 
 -------------------------------------------------------------------------------
-
-   Recording Status : OFF
 
    1) Start Recording
 
@@ -33,8 +32,11 @@ x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~
 
    4) Purge Recordings
 
+
 -------------------------------------------------------------------------------
-   Selection; Menu Options = 1-4, Quit = Q:
+Selection; Menu Options = 1-4, Quit = Q:
+
+
 ```
 - Options Menu, now with 7 options...
 ```
