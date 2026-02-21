@@ -1,303 +1,363 @@
-# scripts/recorder.py - Core recording functionality using ctypes to interface
-# with NVIDIA's NvFBC API.  Updated for driver 399.07 (uses NvFBCCreateEx).
-# FALL-BACK: if NvFBCPlugin.dll is missing we grab the desktop with d3dshot
-# and feed the same BGRA frame into PyAV + NVENC.
+# scripts/recorder.py
+# Video : mss (DXGI Desktop Duplication) → OpenCV VideoWriter → x264vfw
+# Audio : pyaudiowpatch WASAPI loopback (system out) + mic (system in)
+#         both captured in parallel threads → separate temp WAVs
+# Mux   : imageio_ffmpeg binary combines video + mixed audio → final .mkv
 
-import ctypes
 import os
+import tempfile
 import threading
 import time
-import numpy as np  # <- needed for fast numpy-array wrapper
-from ctypes import c_void_p, c_int, c_uint32, POINTER, Structure
-import av
+import wave
 
-# ---------- Platform-specific DLL loading ----------
-if os.name == 'nt':
-    WinDLL = ctypes.WinDLL
-    WINFUNCTYPE = ctypes.WINFUNCTYPE
-else:
-    WinDLL = None
-    WINFUNCTYPE = ctypes.CFUNCTYPE  # placeholder
+import cv2
+import mss
+import numpy as np
+import pyaudiowpatch as pyaudio
 
-# ---------- Constants ----------
-NVFBC_API_VERSION = 0x10001
-NVFBC_CAPTURE_TO_SYS = 0x1
-NVFBC_GRAB_FRAME_FLAGS_NO_WAIT = 0x1
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+AUDIO_FORMAT = pyaudio.paInt16
+AUDIO_CHUNK  = 1024     # frames per read
 
-NVFBC_SUCCESS = 0
-NVFBC_ERR_INVALID_PARAM = -2
-NVFBC_ERR_API_VERSION = -3
-NVFBC_ERR_UNSUPPORTED = -5
-
-# ---------- Structures ----------
-class NVFBC_CREATE_HANDLE_EX_PARAMS(Structure):
-    _fields_ = [
-        ("dwVersion", c_uint32),
-        ("dwFlags", c_uint32),
-        ("pDevice", c_void_p),
-        ("pPrivateData", c_void_p),
-    ]
-
-
-class NVFBC_GET_STATUS_PARAMS(Structure):
-    _fields_ = [
-        ("dwVersion", c_uint32),
-        ("bIsCapturePossible", c_int),
-        ("bCurrentlyCapturing", c_int),
-        ("dwAdapterIdx", c_uint32),
-    ]
-
-
-class NVFBC_CREATE_CAPTURE_SESSION_PARAMS(Structure):
-    _fields_ = [
-        ("dwVersion", c_uint32),
-        ("eCaptureType", c_int),
-        ("dwAdapterIdx", c_uint32),
-        ("eBufferFormat", c_int),
-        ("dwWidth", c_uint32),
-        ("dwHeight", c_uint32),
-        ("dwSamplingRate", c_uint32),
-        ("bWithCursor", c_int),
-    ]
-
-
-class NVFBC_DESTROY_CAPTURE_SESSION_PARAMS(Structure):
-    _fields_ = [("dwVersion", c_uint32)]
-
-
-class NVFBC_FRAME_GRAB_INFO(Structure):
-    _fields_ = [
-        ("dwVersion", c_uint32),
-        ("dwWidth", c_uint32),
-        ("dwHeight", c_uint32),
-        ("dwByteSize", c_uint32),
-        ("pFrameBuffer", c_void_p),
-    ]
-
-
-class NVFBC_GRAB_FRAME_PARAMS(Structure):
-    _fields_ = [
-        ("dwVersion", c_uint32),
-        ("dwFlags", c_uint32),
-        ("pFrameGrabInfo", POINTER(NVFBC_FRAME_GRAB_INFO)),
-    ]
-
-
-# ---------- DLL loading ----------
-def find_nvfbc_dll():
-    if os.name == 'nt':
-        pf = os.environ.get("ProgramFiles", r"C:\Program Files")
-        dll_path = os.path.join(pf, "NVIDIA Corporation", "NvFBC", "NvFBCPlugin.dll")
-        return dll_path if os.path.exists(dll_path) else None
-    return None
-
-
-# ---------- Function prototypes ----------
-nvfbc = None
-if WinDLL:
-    try:
-        dll_path = find_nvfbc_dll()
-        nvfbc = WinDLL(dll_path) if dll_path else WinDLL("NvFBCPlugin.dll")
-
-        NvFBCCreateEx_proto = WINFUNCTYPE(
-            c_int, POINTER(NVFBC_CREATE_HANDLE_EX_PARAMS), POINTER(c_void_p)
-        )
-        NvFBCCreateEx = NvFBCCreateEx_proto(("NvFBCCreateEx", nvfbc))
-
-        NvFBCDestroyInstance_proto = WINFUNCTYPE(c_int, c_void_p)
-        NvFBCDestroyInstance = NvFBCDestroyInstance_proto(
-            ("NvFBCDestroyInstance", nvfbc)
-        )
-
-        _NvFBCGetStatus = nvfbc.NvFBCGetStatus
-        _NvFBCGetStatus.argtypes = [c_void_p, POINTER(NVFBC_GET_STATUS_PARAMS)]
-        _NvFBCGetStatus.restype = c_int
-
-        _NvFBCCreateCaptureSession = nvfbc.NvFBCCreateCaptureSession
-        _NvFBCCreateCaptureSession.argtypes = [
-            c_void_p,
-            POINTER(NVFBC_CREATE_CAPTURE_SESSION_PARAMS),
-        ]
-        _NvFBCCreateCaptureSession.restype = c_int
-
-        _NvFBCDestroyCaptureSession = nvfbc.NvFBCDestroyCaptureSession
-        _NvFBCDestroyCaptureSession.argtypes = [
-            c_void_p,
-            POINTER(NVFBC_DESTROY_CAPTURE_SESSION_PARAMS),
-        ]
-        _NvFBCDestroyCaptureSession.restype = c_int
-
-        _NvFBCCaptureFrame = nvfbc.NvFBCCaptureFrame
-        _NvFBCCaptureFrame.argtypes = [c_void_p, POINTER(NVFBC_GRAB_FRAME_PARAMS)]
-        _NvFBCCaptureFrame.restype = c_int
-
-    except OSError:
-        nvfbc = None
-
-# ---------- Globals ----------
-session_handle = c_void_p()
-is_capturing = False
+# ---------------------------------------------------------------------------
+# Globals
+# ---------------------------------------------------------------------------
+is_capturing   = False
 capture_thread = None
-NVFBC_AVAILABLE = bool(nvfbc)  # simple flag
+_pa            = None   # PyAudio instance, kept alive for the session
 
 
-# ---------- API helpers ----------
-def init_nvidia_apis():
-    global session_handle
-    if not NVFBC_AVAILABLE:
-        print("NvFBC not available on this system.")
+# ---------------------------------------------------------------------------
+# Initialisation
+# ---------------------------------------------------------------------------
+def init_capture_system() -> bool:
+    """Verify all runtime deps and codec availability. Returns True on success."""
+    global _pa
+
+    missing = []
+    for mod in ("cv2", "mss", "numpy", "pyaudiowpatch", "imageio_ffmpeg"):
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(mod)
+
+    if missing:
+        print(f"ERROR: missing packages: {', '.join(missing)}")
+        print("       Please run the installer (option 2 in the batch menu).")
         return False
 
-    params = NVFBC_CREATE_HANDLE_EX_PARAMS()
-    params.dwVersion = NVFBC_API_VERSION
-    params.dwFlags = 0
-    params.pDevice = None
-    params.pPrivateData = None
+    # x264vfw probe
+    tmp    = os.path.join(tempfile.gettempdir(), "_x264vfw_probe.avi")
+    fourcc = cv2.VideoWriter_fourcc(*"X264")
+    writer = cv2.VideoWriter(tmp, fourcc, 30, (320, 240))
+    ok     = writer.isOpened()
+    writer.release()
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
 
-    status = NvFBCCreateEx(ctypes.byref(params), ctypes.byref(session_handle))
-    if status != NVFBC_SUCCESS:
-        print(f"Failed to create NvFBC instance. Status: {status}")
+    if not ok:
+        print("ERROR: x264vfw codec not available via OpenCV.")
+        print("       Install x264vfw from https://sourceforge.net/projects/x264vfw/")
         return False
 
-    print("NvFBC instance created successfully.")
+    # Keep one PyAudio instance open for the session
+    _pa = pyaudio.PyAudio()
+
+    print("Capture system initialised  (mss + x264vfw + pyaudiowpatch + ffmpeg).")
     return True
 
 
-# ---------- frame-grab helpers ----------
-def grab_frame_nvfbc(width: int, height: int):
-    """Return BGRA numpy array (H,W,4) or None if grab failed."""
-    grab_params = NVFBC_GRAB_FRAME_PARAMS()
-    grab_params.dwVersion = NVFBC_API_VERSION
-    grab_params.dwFlags = NVFBC_GRAB_FRAME_FLAGS_NO_WAIT
-
-    frame_info = NVFBC_FRAME_GRAB_INFO()
-    frame_info.dwVersion = NVFBC_API_VERSION
-    grab_params.pFrameGrabInfo = ctypes.byref(frame_info)
-
-    status = _NvFBCCaptureFrame(session_handle, ctypes.byref(grab_params))
-    if status != NVFBC_SUCCESS:
+# ---------------------------------------------------------------------------
+# Audio device helpers
+# ---------------------------------------------------------------------------
+def _get_loopback_device(pa: pyaudio.PyAudio):
+    """Return device-info dict for the WASAPI loopback of the default output, or None."""
+    try:
+        wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
+    except OSError:
+        print("WARNING: WASAPI not available – system audio will not be recorded.")
         return None
 
-    data = ctypes.string_at(frame_info.pFrameBuffer, frame_info.dwByteSize)
-    return np.frombuffer(data, dtype=np.uint8).reshape((height, width, 4))
+    default_out = pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
+
+    for lb in pa.get_loopback_device_info_generator():
+        if default_out["name"] in lb["name"]:
+            return lb
+
+    print("WARNING: could not find a loopback device for the default output.")
+    return None
 
 
-def grab_frame_d3dshot(width: int, height: int):
-    """BGRA numpy array via Desktop Duplication (d3dshot)."""
-    import d3dshot
-
-    if not hasattr(grab_frame_d3dshot, "d"):
-        grab_frame_d3dshot.d = d3dshot.create(capture_output="numpy")
-        grab_frame_d3dshot.d.capture(target_fps=60)
-
-    frame = grab_frame_d3dshot.d.get_latest_frame()
-    if frame is None:
+def _get_default_mic(pa: pyaudio.PyAudio):
+    """Return device-info dict for the default WASAPI microphone input, or None."""
+    try:
+        wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
+    except OSError:
+        print("WARNING: WASAPI not available – microphone will not be recorded.")
         return None
-    # ensure correct shape
-    if frame.shape[2] == 4:
-        return frame
-    if frame.shape[2] == 3:
-        return np.dstack([frame, np.full(frame.shape[:2], 255, dtype=np.uint8)])
-    raise RuntimeError("Unexpected frame format")
+
+    idx  = wasapi["defaultInputDevice"]
+    if idx < 0:
+        print("WARNING: no default input device found.")
+        return None
+    info = pa.get_device_info_by_index(idx)
+    return info if info["maxInputChannels"] > 0 else None
 
 
-# ---------- Capture loop ----------
-def capture_loop(config):
+# ---------------------------------------------------------------------------
+# Audio capture thread
+# ---------------------------------------------------------------------------
+def _audio_capture_thread(pa: pyaudio.PyAudio, device_info: dict,
+                           wav_path: str, stop_event: threading.Event):
+    """
+    Stream audio from device_info into a WAV file.
+    For loopback devices pyaudiowpatch exposes output channels as input channels.
+    Runs until stop_event is set.
+    """
+    is_loopback = device_info.get("isLoopbackDevice", False)
+
+    if is_loopback:
+        channels = int(device_info["maxOutputChannels"]) or 2
+    else:
+        channels = int(device_info["maxInputChannels"]) or 1
+
+    rate = int(device_info["defaultSampleRate"])
+
+    try:
+        stream = pa.open(
+            format             = AUDIO_FORMAT,
+            channels           = channels,
+            rate               = rate,
+            input              = True,
+            input_device_index = device_info["index"],
+            frames_per_buffer  = AUDIO_CHUNK,
+        )
+    except OSError as e:
+        print(f"WARNING: could not open audio stream for '{device_info['name']}': {e}")
+        return
+
+    frames = []
+    while not stop_event.is_set():
+        try:
+            data = stream.read(AUDIO_CHUNK, exception_on_overflow=False)
+            frames.append(data)
+        except OSError:
+            break
+
+    stream.stop_stream()
+    stream.close()
+
+    if not frames:
+        return
+
+    with wave.open(wav_path, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(pa.get_sample_size(AUDIO_FORMAT))
+        wf.setframerate(rate)
+        wf.writeframes(b"".join(frames))
+
+
+# ---------------------------------------------------------------------------
+# ffmpeg mux
+# ---------------------------------------------------------------------------
+def _mux(video_path: str, loopback_wav, mic_wav, output_path: str):
+    """
+    Mux video (x264 stream, copied as-is) with up to two audio WAV sources.
+    System audio and microphone are blended with ffmpeg's amix filter.
+    Output container is MKV (flexible, no audio format restrictions).
+    """
+    import subprocess
+    import imageio_ffmpeg
+
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd    = [ffmpeg, "-y"]
+
+    # ---- inputs ----
+    cmd += ["-i", video_path]
+
+    audio_src_indices = []   # 1-based ffmpeg input indices for audio
+    for wav in (loopback_wav, mic_wav):
+        if wav and os.path.exists(wav) and os.path.getsize(wav) > 44:
+            cmd += ["-i", wav]
+            audio_src_indices.append(len(audio_src_indices) + 1)
+
+    # ---- filter graph ----
+    if len(audio_src_indices) == 2:
+        # Mix loopback + mic; normalize=0 keeps original levels, avoids clipping
+        fc = (f"[{audio_src_indices[0]}:a][{audio_src_indices[1]}:a]"
+              f"amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]")
+        cmd += ["-filter_complex", fc, "-map", "0:v", "-map", "[aout]"]
+    elif len(audio_src_indices) == 1:
+        cmd += ["-map", "0:v", f"-map", f"{audio_src_indices[0]}:a"]
+    else:
+        cmd += ["-map", "0:v"]
+
+    # ---- codecs: copy video, encode audio to AAC 192k ----
+    cmd += ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", output_path]
+
+    print("Muxing video + audio ...")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print("WARNING: ffmpeg mux failed – video-only fallback saved.")
+        print(result.stderr[-2000:])
+        try:
+            import shutil
+            fallback = output_path.replace(".mkv", "_video_only.avi")
+            shutil.copy2(video_path, fallback)
+            print(f"  Fallback saved: {fallback}")
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Main capture loop
+# ---------------------------------------------------------------------------
+def _capture_loop(config: dict):
     global is_capturing
 
-    output_filename = os.path.join(
-        config["output_path"], f"capture-{int(time.time())}.mp4"
-    )
+    w       = config["resolution"]["width"]
+    h       = config["resolution"]["height"]
+    fps     = config["fps"]
+    out_dir = config["output_path"]
+    os.makedirs(out_dir, exist_ok=True)
 
-    # choose grabber once
-    grab_frame = grab_frame_nvfbc if NVFBC_AVAILABLE else grab_frame_d3dshot
-    w, h = config["resolution"]["width"], config["resolution"]["height"]
+    stamp   = int(time.time())
+    tmp_dir = tempfile.gettempdir()
+    vid_tmp = os.path.join(tmp_dir, f"d264_video_{stamp}.avi")
+    lb_wav  = os.path.join(tmp_dir, f"d264_loopback_{stamp}.wav")
+    mic_wav = os.path.join(tmp_dir, f"d264_mic_{stamp}.wav")
+    final   = os.path.join(out_dir, f"capture-{stamp}.mkv")
 
-    with av.open(output_filename, mode="w") as container:
-        stream = container.add_stream(config["codec"], rate=config["fps"])
-        stream.width, stream.height = w, h
-        stream.pix_fmt = "yuv420p"
+    # ---- Identify audio devices ----
+    loopback_info = _get_loopback_device(_pa)
+    mic_info      = _get_default_mic(_pa)
+
+    if loopback_info:
+        print(f"  System audio  : {loopback_info['name']}")
+    else:
+        print("  System audio  : unavailable")
+
+    if mic_info:
+        print(f"  Microphone    : {mic_info['name']}")
+    else:
+        print("  Microphone    : unavailable")
+
+    # ---- Start audio threads ----
+    stop_audio    = threading.Event()
+    audio_threads = []
+
+    if loopback_info:
+        t = threading.Thread(target=_audio_capture_thread,
+                             args=(_pa, loopback_info, lb_wav, stop_audio),
+                             daemon=True)
+        t.start()
+        audio_threads.append(t)
+
+    if mic_info:
+        t = threading.Thread(target=_audio_capture_thread,
+                             args=(_pa, mic_info, mic_wav, stop_audio),
+                             daemon=True)
+        t.start()
+        audio_threads.append(t)
+
+    # ---- Open video writer ----
+    fourcc = cv2.VideoWriter_fourcc(*"X264")
+    writer = cv2.VideoWriter(vid_tmp, fourcc, fps, (w, h))
+
+    if not writer.isOpened():
+        print("ERROR: VideoWriter failed to open.  Recording aborted.")
+        stop_audio.set()
+        for t in audio_threads:
+            t.join()
+        is_capturing = False
+        return
+
+    print(f"Recording → {final}")
+
+    frame_dur = 1.0 / fps
+    next_tick = time.perf_counter()
+
+    with mss.mss() as sct:
+        monitor = sct.monitors[1]   # primary desktop
 
         while is_capturing:
-            frame_bgra = grab_frame(w, h)
-            if frame_bgra is None:
-                time.sleep(0.001)
+            now = time.perf_counter()
+            if now < next_tick:
+                time.sleep(max(0.0, next_tick - now - 0.001))
                 continue
 
-            av_frame = av.VideoFrame.from_ndarray(frame_bgra, format="bgra")
-            for packet in stream.encode(av_frame):
-                container.mux(packet)
+            raw   = sct.grab(monitor)
+            frame = np.asarray(raw, dtype=np.uint8)
+            bgr   = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
-            time.sleep(1.0 / config["fps"])
+            if bgr.shape[1] != w or bgr.shape[0] != h:
+                bgr = cv2.resize(bgr, (w, h), interpolation=cv2.INTER_LINEAR)
 
-        # flush encoder
-        for packet in stream.encode():
-            container.mux(packet)
+            writer.write(bgr)
+            next_tick += frame_dur
+
+    writer.release()
+
+    # ---- Stop audio threads ----
+    stop_audio.set()
+    for t in audio_threads:
+        t.join(timeout=5)
+
+    # ---- Mux to final file ----
+    _mux(vid_tmp,
+         lb_wav if loopback_info else None,
+         mic_wav if mic_info     else None,
+         final)
+
+    # Tidy temp files
+    for p in (vid_tmp, lb_wav, mic_wav):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+    print(f"Recording saved: {final}")
 
 
-# ---------- Session control ----------
-def start_capture(config):
+# ---------------------------------------------------------------------------
+# Public API  (called by launcher.py)
+# ---------------------------------------------------------------------------
+def start_capture(config: dict):
     global is_capturing, capture_thread
-    if not session_handle and NVFBC_AVAILABLE:
-        print("NvFBC instance not created.")
-        return
-    if not NVFBC_AVAILABLE:
-        # d3dshot path needs no session
-        is_capturing = True
-        capture_thread = threading.Thread(target=capture_loop, args=(config,))
-        capture_thread.start()
-        print("Capture thread started (Desktop Duplication).")
+
+    if is_capturing:
+        print("Already capturing.")
         return
 
-    params = NVFBC_CREATE_CAPTURE_SESSION_PARAMS()
-    params.dwVersion = NVFBC_API_VERSION
-    params.eCaptureType = NVFBC_CAPTURE_TO_SYS
-    params.dwAdapterIdx = 0
-    params.eBufferFormat = 0  # ARGB
-    params.dwWidth = config["resolution"]["width"]
-    params.dwHeight = config["resolution"]["height"]
-    params.dwSamplingRate = config["fps"]
-    params.bWithCursor = 1
-
-    status = _NvFBCCreateCaptureSession(session_handle, ctypes.byref(params))
-    if status != NVFBC_SUCCESS:
-        print(f"Failed to create capture session. Status: {status}")
-    else:
-        print("Capture session created successfully.")
-        is_capturing = True
-        capture_thread = threading.Thread(target=capture_loop, args=(config,))
-        capture_thread.start()
+    is_capturing   = True
+    capture_thread = threading.Thread(target=_capture_loop, args=(config,), daemon=True)
+    capture_thread.start()
 
 
 def stop_capture():
     global is_capturing, capture_thread
-    if not NVFBC_AVAILABLE:
-        if is_capturing:
-            is_capturing = False
-            capture_thread.join()
-        print("Desktop-duplication capture stopped.")
-        return
-    if not session_handle:
-        print("NvFBC instance not created.")
+
+    if not is_capturing:
+        print("Not currently capturing.")
         return
 
-    if is_capturing:
-        is_capturing = False
-        capture_thread.join()
+    is_capturing = False
+    if capture_thread and capture_thread.is_alive():
+        print("Finalising recording (muxing audio) – please wait ...")
+        capture_thread.join(timeout=60)
 
-    params = NVFBC_DESTROY_CAPTURE_SESSION_PARAMS()
-    params.dwVersion = NVFBC_API_VERSION
-    status = _NvFBCDestroyCaptureSession(session_handle, ctypes.byref(params))
-    if status != NVFBC_SUCCESS:
-        print(f"Failed to destroy capture session. Status: {status}")
-    else:
-        print("Capture session destroyed successfully.")
+    capture_thread = None
 
 
 def cleanup():
-    if NVFBC_AVAILABLE and session_handle:
-        NvFBCDestroyInstance(session_handle)
-        print("NvFBC instance destroyed.")
-    if hasattr(grab_frame_d3dshot, "d"):
-        grab_frame_d3dshot.d.stop()
-        print("d3dshot stopped.")
+    """Called on application exit – releases PyAudio."""
+    if is_capturing:
+        stop_capture()
+    global _pa
+    if _pa:
+        _pa.terminate()
+        _pa = None
