@@ -38,11 +38,45 @@ Selection; Menu Options = 1-4, Quit = Q:
 
 
 ```
+- The display while recording...(v0.2)
+```
+===============================================================================
+   Desktop-264-Capture : Recording
+===============================================================================
+
+
+
+
+
+
+
+   Status        : RECORDING  [00:00:10]
+
+   Resolution    : 1280x720
+   FPS Target    : 30
+   Video Profile : Optimal Performance
+   Audio Profile : Optimal Performance  (160 kbps)
+
+   Temp Size     : 22.8 MB
+   Output Dir    : G:\Videos\Output
+
+
+
+
+
+
+
+-------------------------------------------------------------------------------
+Press ENTER to stop recording ...
+
+
+```
 - Options Menu, now with 7 options...
 ```
 ===============================================================================
    Desktop-264-Capture : Configure Settings
 ===============================================================================
+
 
 
 
@@ -62,11 +96,9 @@ Selection; Menu Options = 1-4, Quit = Q:
 
 
 
+
 -------------------------------------------------------------------------------
    Selection; Options = 1-7, Back = B:
-
-
-
 
 
 ```
