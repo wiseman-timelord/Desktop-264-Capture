@@ -17,8 +17,7 @@ x264vfw Desktop recording on Windows ~8.1-10
   
   Purging previous installation ...
     Deleting previous virtual-environment ...
-    Purged data\persistent.json
-    Purged data\x264vfw
+    Purged data\
   
   Creating virtual-environment ...
     C:\Program Files\Python312\python.exe -m venv .venv
@@ -70,35 +69,27 @@ x264vfw Desktop recording on Windows ~8.1-10
     ensured  .\Output\
     ensured  .\data\
     ensured  .\scripts\
-    ensured  .\data\x264vfw\
     wrote    data\persistent.json
-  
-  Setting up openh264 (win64) ...
-    Downloading  openh264-1.8.0-win64.d  [####################]  100%
-    Extracting    openh264-1.8.0-win64.d  [####################]  100%
-  
-    Extracted  → openh264-1.8.0-win64.dll
-    ✓  openh264 ready.
   
   ============================================================
   INSTALLATION SUMMARY
   ============================================================
     .venv\Scripts\python.exe -m pip show mss
-    ✓  mss
+    ok  mss
     .venv\Scripts\python.exe -m pip show opencv-python
-    ✓  opencv-python
+    ok  opencv-python
     .venv\Scripts\python.exe -m pip show numpy
-    ✓  numpy
+    ok  numpy
     .venv\Scripts\python.exe -m pip show pyaudiowpatch
-    ✓  pyaudiowpatch
+    ok  pyaudiowpatch
     .venv\Scripts\python.exe -m pip show imageio-ffmpeg
-    ✓  imageio-ffmpeg
-    ✓  openh264 (win64) – openh264-1.8.0-win64.dll
+    ok  imageio-ffmpeg
   
-    ✓  All components installed successfully.
+    All components installed successfully.
   ============================================================
   
-  Install complete – press ENTER to return to menu.
+  Install complete - press ENTER to return to menu.
+
   ```
 </details>
 
