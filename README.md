@@ -4,6 +4,39 @@ Statue: Alpha - Restart underway.
 ### Description
 x264vfw Desktop recording on Windows ~8.1-10
 
+### Media
+- Main menu will be like this...
+```
+===============================================================================
+   Desktop-264-Capture
+===============================================================================
+
+ Videos Folder:
+     .\Output
+
+ Folder Contents:
+    (empty)
+    (empty)
+    (empty)
+    (empty)
+    (empty)
+
+-------------------------------------------------------------------------------
+
+   Recording Status : OFF
+
+   1) Start Recording
+
+   2) Configure Settings
+
+   3) System Information
+
+   4) Purge Recordings
+
+-------------------------------------------------------------------------------
+   Selection; Menu Options = 1-4, Quit = Q:
+```
+
 ### Output
 <details>
 <summary>The installer for purge install...(ALPHA)</summary>
