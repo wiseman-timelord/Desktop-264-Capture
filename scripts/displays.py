@@ -149,8 +149,6 @@ def main_menu_screen(config):
       1  blank
       1  mid-separator
       1  blank
-      1  recording status
-      1  blank
       1  option 1
       1  blank
       1  option 2
@@ -158,7 +156,7 @@ def main_menu_screen(config):
       1  option 3
       1  blank
       1  option 4
-      1  blank
+      2  blank
       1  bottom separator
       1  input prompt
     ──
@@ -173,12 +171,6 @@ def main_menu_screen(config):
     shown     = videos[:MAX_SLOTS]
     slots     = len(shown)
 
-    # Recording status line
-    status_line = "OFF"
-    if configure.is_recording and configure.recording_start_time:
-        elapsed = time.time() - configure.recording_start_time
-        status_line = f"RECORDING  [{fmt_time(elapsed)}]"
-
     cls()
     header()
     blank()                                         # line 4
@@ -187,27 +179,26 @@ def main_menu_screen(config):
     print(f"     {_display_path(out_path)}")        # line 6
     blank()                                         # line 7
 
-    print(" Recent Files:")                      # line 8
+    print(" Recent Files:")                         # line 8
     for name, size in shown:                        # lines 9-13 (up to 5 real files)
         print(f"    {name}  ({fmt_bytes(size)})")
     for _ in range(MAX_SLOTS - slots):              # pad remaining slots with "(empty)"
         print("    (empty)")
     blank()                                         # line 14
+    blank()                                         # line 14
 
     footer()                                        # line 15
     blank()                                         # line 16
-    print(f"   Recording Status : {status_line}")  # line 17
+    print("   1) Start Recording")                 # line 17
     blank()                                         # line 18
-    print("   1) Start Recording")                 # line 19
+    print("   2) Configure Settings")              # line 19
     blank()                                         # line 20
-    print("   2) Configure Settings")              # line 21
+    print("   3) System Information")              # line 21
     blank()                                         # line 22
-    print("   3) System Information")              # line 23
-    blank()                                         # line 24
-    print("   4) Purge Recordings")                # line 25
-    blank()                                         # line 26
-    footer()                                        # line 27
-    choice = input("   Selection; Menu Options = 1-4, Quit = Q: ").strip()  # line 28
+    print("   4) Purge Recordings")                # line 23
+    blank(2)                                        # lines 24-25
+    footer()                                        # line 26
+    choice = input("Selection; Menu Options = 1-4, Quit = Q: ").strip()  # line 28
     return choice
 
 
