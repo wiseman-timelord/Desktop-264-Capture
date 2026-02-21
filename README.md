@@ -2,7 +2,7 @@
 Statue: Alpha - Restart underway.
 
 ### Description
-x264vfw Desktop recording on Windows ~8.1-10
+x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~3.12.x. Batch launched with menu for, install or run. No GUI, intended to be used on secondary display, while recording primary display. Intended to have quality/optimal/HighCompression options for audio/video, having simpler inteface with comprihensive researched parameters behind.
 
 ### Media
 - Main menu will be like this...
