@@ -6,7 +6,7 @@ x264vfw Desktop recording on Windows ~8.1-10
 
 ### Output
 <details>
-<summary>The installer for purge install...</summary>
+<summary>The installer for purge install...(ALPHA)</summary>
   
   ```
   ===============================================================================
