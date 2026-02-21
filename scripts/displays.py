@@ -173,32 +173,32 @@ def main_menu_screen(config):
 
     cls()
     header()
-    blank()                                         # line 4
+    blank() 
 
-    print(" Videos Folder:")                        # line 5
-    print(f"     {_display_path(out_path)}")        # line 6
-    blank()                                         # line 7
+    print(" Videos Folder:")
+    print(f"     {_display_path(out_path)}") 
+    blank() 
 
-    print(" Recent Files:")                         # line 8
+    print(" Recent Files:")      
     for name, size in shown:                        # lines 9-13 (up to 5 real files)
         print(f"    {name}  ({fmt_bytes(size)})")
     for _ in range(MAX_SLOTS - slots):              # pad remaining slots with "(empty)"
         print("    (empty)")
-    blank()                                         # line 14
-    blank()                                         # line 14
+    blank()
+    blank() 
 
-    footer()                                        # line 15
-    blank()                                         # line 16
-    print("   1) Start Recording")                 # line 17
-    blank()                                         # line 18
-    print("   2) Configure Settings")              # line 19
-    blank()                                         # line 20
-    print("   3) System Information")              # line 21
-    blank()                                         # line 22
-    print("   4) Purge Recordings")                # line 23
-    blank(2)                                        # lines 24-25
-    footer()                                        # line 26
-    choice = input("Selection; Menu Options = 1-4, Quit = Q: ").strip()  # line 28
+    footer() 
+    blank()
+    print("   1) Start Recording")
+    blank()
+    print("   2) Configure Settings")
+    blank()
+    print("   3) System Information")
+    blank()
+    print("   4) Purge Recordings") 
+    blank(2)      
+    footer()
+    choice = input("Selection; Menu Options = 1-4, Quit = Q: ").strip()
     return choice
 
 
@@ -215,11 +215,11 @@ def purge_recordings_screen(config):
 
     cls()
     header("Purge Recordings")
-    blank(3)
+    blank(8)
 
     if not videos:
         print("   No recordings found to purge.")
-        blank(10)
+        blank(11)
         footer()
         input("   Press ENTER to return to menu ... ")
         return 0
@@ -231,7 +231,7 @@ def purge_recordings_screen(config):
     blank()
     print(f"   This will delete ALL files matching '{VIDEO_PREFIX}*'")
     print("   in the output folder.  This cannot be undone.")
-    blank(6)
+    blank(8)
     footer()
     confirm = input("   Type YES to confirm purge, or press ENTER to cancel: ").strip()
 
@@ -247,9 +247,9 @@ def purge_recordings_screen(config):
 
         cls()
         header("Purge Recordings")
-        blank(8)
+        blank(11)
         print(f"   Purged {deleted} of {len(videos)} recording(s).")
-        blank(8)
+        blank(11)
         footer()
         input("   Press ENTER to return to menu ... ")
         return deleted
@@ -291,7 +291,7 @@ def recording_monitor(config):
 
         cls()
         header("Recording")
-        blank(3)
+        blank(7)
         print(f"   Status        : RECORDING  [{fmt_time(elapsed)}]")
         blank()
         print(f"   Resolution    : {res['width']}x{res['height']}")
@@ -301,11 +301,10 @@ def recording_monitor(config):
         blank()
         print(f"   Temp Size     : {fmt_bytes(tmp_size)}")
         print(f"   Output Dir    : {out}")
-        blank(5)
-        print("   Press ENTER to stop recording ...")
-        blank(2)
+        blank(7)
         footer()
-
+        print("Press ENTER to stop recording ...")
+        
         # Poll for ENTER (~1 s in 100 ms slices so display refreshes)
         for _ in range(10):
             if msvcrt.kbhit():
@@ -318,7 +317,7 @@ def recording_monitor(config):
     # Signal the capture thread and wait for mux
     cls()
     header("Recording")
-    blank(5)
+    blank(8)
     print("   Stopping capture ...")
     print("   Muxing audio + video - please wait ...")
     blank()
@@ -336,9 +335,10 @@ def recording_monitor(config):
 
     cls()
     header("Recording Complete")
-    blank(7)
+    blank(10)
     if output_file:
         print(f"   File    : {output_file}")
+        blank(1)
         print(f"   Size    : {fmt_bytes(file_size)}")
     else:
         print("   WARNING : Output file not found - check Output folder.")
@@ -357,7 +357,7 @@ def configure_settings_screen(config):
         res = config["resolution"]
         cls()
         header("Configure Settings")
-        blank(3)
+        blank(5)
 
         print(f"   1) Resolution         : {res['width']}x{res['height']}"
               f"   (cycles: 1080p / 720p / 480p)")
@@ -376,7 +376,7 @@ def configure_settings_screen(config):
         blank()
         print(f"   7) Container Format   : {config.get('container_format', 'MKV')}"
               f"   (cycles: MKV / MP4)")
-        blank(3)
+        blank(5)
         footer()
         choice = input("   Selection; Options = 1-7, Back = B: ").strip()
 
@@ -447,7 +447,7 @@ def _video_compression_screen(config):
     while True:
         cls()
         header("Video Compression")
-        blank(3)
+        blank(6)
 
         for i, opt in enumerate(options, 1):
             profile = configure.VIDEO_COMPRESSION[opt]
@@ -458,7 +458,7 @@ def _video_compression_screen(config):
                   f"tune={profile['tune']}")
             blank()
 
-        blank(3)
+        blank(5)
         footer()
         sel = input("   Selection; Options = 1-3, Back = B: ").strip()
 
@@ -483,7 +483,7 @@ def _audio_compression_screen(config):
     while True:
         cls()
         header("Audio Compression")
-        blank(3)
+        blank(6)
 
         eff = configure.effective_audio_bitrate(config)
         print(f"   Selected bitrate : {config.get('audio_bitrate', 192)} kbps")
@@ -499,7 +499,7 @@ def _audio_compression_screen(config):
             print(f"      {profile['description']}  ({cap_str})")
             blank()
 
-        blank(3)
+        blank(5)
         footer()
         sel = input("   Selection; Options = 1-3, Back = B: ").strip()
 
@@ -556,33 +556,34 @@ def _output_dir_screen(config):
 def system_info_screen():
     cls()
     header("System Information")
-    blank(4)
+    blank(5)
 
     print(f"   Python   : {sys.version.split()[0]}")
-
+    blank(1)
     try:
         import cv2
         print(f"   OpenCV   : {cv2.__version__}")
     except ImportError:
         print("   OpenCV   : not installed")
-
+    blank(1)
     try:
         import mss as _mss
         print("   mss      : available")
     except ImportError:
         print("   mss      : not installed")
-
+    blank(1)
     try:
         import imageio_ffmpeg
         ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
         print(f"   ffmpeg   : {ffmpeg_path}")
     except Exception:
         print("   ffmpeg   : not found")
-
+    blank(1)
     print("   Encoding : MJPG intermediate -> libx264 via ffmpeg")
+    blank(1)
     print(f"   Output   : {DEFAULT_OUTPUT}")
 
-    blank(8)
+    blank(6)
     footer()
     input("   Press ENTER to continue ... ")
 
