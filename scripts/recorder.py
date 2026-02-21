@@ -221,7 +221,8 @@ def _mux(video_path: str, loopback_wav, mic_wav, output_path: str,
         print(result.stderr[-2000:])
         try:
             import shutil
-            fallback = output_path.replace(".mkv", "_video_only.avi")
+            base_no_ext = os.path.splitext(output_path)[0]
+            fallback = f"{base_no_ext}_video_only.avi"
             shutil.copy2(video_path, fallback)
             print(f"  Fallback saved: {fallback}")
         except Exception:
@@ -248,14 +249,16 @@ def _capture_loop(config: dict):
     lb_wav  = os.path.join(tmp_dir, f"d264_loopback_{stamp}.wav")
     mic_wav = os.path.join(tmp_dir, f"d264_mic_{stamp}.wav")
 
-    # Build date-based filename: Desktop_Video_YYYY_MM_DD.mkv
+    # Build date-based filename: Desktop_Video_YYYY_MM_DD.<ext>
+    # Extension is driven by the container_format setting (MKV or MP4).
     # If a file with the same date already exists, append _NNN counter.
+    container = config.get("container_format", "MKV").lower()   # "mkv" or "mp4"
     date_str = time.strftime("%Y_%m_%d")
     base     = os.path.join(out_dir, f"Desktop_Video_{date_str}")
-    final    = f"{base}.mkv"
+    final    = f"{base}.{container}"
     counter  = 1
     while os.path.exists(final):
-        final = f"{base}_{counter:03d}.mkv"
+        final = f"{base}_{counter:03d}.{container}"
         counter += 1
     current_temp_video = vid_tmp
 

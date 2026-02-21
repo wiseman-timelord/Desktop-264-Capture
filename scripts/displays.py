@@ -382,9 +382,12 @@ def configure_settings_screen(config):
         print(f"   5) Audio Compression  : {config.get('audio_compression', 'Optimal Performance')}")
         blank()
         print(f"   6) Output Directory   : {config['output_path']}")
-        blank(4)
+        blank()
+        print(f"   7) Container Format   : {config.get('container_format', 'MKV')}"
+              f"   (cycles: MKV / MP4)")
+        blank(3)
         footer()
-        choice = input("   Selection; Options = 1-6, Back = B: ").strip()
+        choice = input("   Selection; Options = 1-7, Back = B: ").strip()
 
         # ---- 1) Resolution (cycle) ----
         if choice == "1":
@@ -427,6 +430,15 @@ def configure_settings_screen(config):
         # ---- 6) Output directory ----
         elif choice == "6":
             config = _output_dir_screen(config)
+
+        # ---- 7) Container format (cycle) ----
+        elif choice == "7":
+            opts = configure.container_format_options
+            cur  = config.get("container_format", "MKV")
+            idx  = opts.index(cur) if cur in opts else 0
+            idx  = (idx + 1) % len(opts)
+            config["container_format"] = opts[idx]
+            configure.save_configuration(config)
 
         elif choice.upper() == "B":
             break

@@ -97,6 +97,11 @@ AUDIO_COMPRESSION = {
 audio_bitrate_options = [96, 128, 160, 192, 256]
 
 # ---------------------------------------------------------------------------
+# Container / output format options
+# ---------------------------------------------------------------------------
+container_format_options = ["MKV", "MP4"]
+
+# ---------------------------------------------------------------------------
 # Helper: resolve effective audio bitrate
 # ---------------------------------------------------------------------------
 def effective_audio_bitrate(config: dict) -> int:
@@ -137,6 +142,7 @@ DEFAULT_CONFIG = {
     "video_compression": "Optimal Performance",
     "audio_compression": "Optimal Performance",
     "audio_bitrate":     192,
+    "container_format":  "MKV",
 }
 
 
