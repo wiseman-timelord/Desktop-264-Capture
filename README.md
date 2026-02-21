@@ -130,7 +130,7 @@ x264vfw Desktop recording on Windows ~8.1-10
 </details>
 
 <details>
-<summary>Grok Encoding Research Notes...</summary>
+<summary>Grok Encoding Research Notes (somewhat corrupted)...</summary>
    
    ```
    ### Proposed Configuration Menu: Video/Audio Quality vs Compression
