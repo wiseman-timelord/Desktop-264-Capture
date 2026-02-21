@@ -110,13 +110,13 @@ x264vfw Desktop recording on Windows ~8.1-10
 ### Structure
 The plan for the file structure...
 ```
-.\Geforce-Hybrid-Capture.bat
-.\installer.py   (install libraries in `.venv`)
-.\launcher.py    (run main program)
+.\Desktop-264-Capture.bat
+.\installer.py   (install libraries/packages in, `.venv` and `.\data`, as well as create Json)
+.\launcher.py    (run main program, main loop, startup/shutdown functions)
 .\scripts\* (scripts for program entered through launcher).
-.\scripts\temporary.py
+.\scripts\configure.py   (globals/maps/lists, save/load json)
 .\scripts\recorder.py
-.\data\convifguration.json
+.\data\persistent.json   (persistent settings)
 ```
 
 ### Development
