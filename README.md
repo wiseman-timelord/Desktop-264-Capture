@@ -222,6 +222,13 @@ Selection; Menu Options = 1-4, Quit = Q:
 - Windows 8.1-10 - PClaude Sonnet assessed compatibility ranges, testing on Windows 10.
 - Python 3.7-3.12 - Claude Sonnet assessed compatibility ranges, testing on v3.12.x 
 
+### Instructions
+1. Run the batch, right click and run as admin.
+2. Select install, do clean install, and enable python through firewall if you havent already. After result summary you will be returned to menu.
+3. BAck on the menu, select 1 to load the program.
+4. In the main program, configure the options, then return to main menu and select 1 to start recording, and when you are finished press enter until you return to the menu.
+5. Repeat recording as required, and when you are finished, then exit the program with X on main menu.
+
 ### Structure
 The plan for the file structure...
 ```
