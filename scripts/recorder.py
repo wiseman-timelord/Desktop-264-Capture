@@ -1,5 +1,5 @@
 # scripts/recorder.py
-# Video : mss (DXGI Desktop Duplication) → OpenCV VideoWriter → x264vfw
+# Video : mss (DXGI Desktop Duplication) → OpenCV VideoWriter (MJPG) → ffmpeg libx264 (H.264)
 # Audio : pyaudiowpatch WASAPI loopback (system out) + mic (system in)
 #         both captured in parallel threads → separate temp WAVs
 # Mux   : imageio_ffmpeg binary combines video + mixed audio → final .mkv
@@ -24,9 +24,12 @@ AUDIO_CHUNK  = 1024     # frames per read
 # ---------------------------------------------------------------------------
 # Globals
 # ---------------------------------------------------------------------------
-is_capturing   = False
-capture_thread = None
-_pa            = None   # PyAudio instance, kept alive for the session
+is_capturing       = False
+capture_thread     = None
+_pa                = None    # PyAudio instance, kept alive for the session
+last_output_file   = None    # path of most recently completed recording
+capture_start_time = None    # time.time() when current capture started
+current_temp_video = None    # path of the in-progress temp AVI (for size polling)
 
 
 # ---------------------------------------------------------------------------
@@ -48,26 +51,10 @@ def init_capture_system() -> bool:
         print("       Please run the installer (option 2 in the batch menu).")
         return False
 
-    # x264vfw probe
-    tmp    = os.path.join(tempfile.gettempdir(), "_x264vfw_probe.avi")
-    fourcc = cv2.VideoWriter_fourcc(*"X264")
-    writer = cv2.VideoWriter(tmp, fourcc, 30, (320, 240))
-    ok     = writer.isOpened()
-    writer.release()
-    try:
-        os.remove(tmp)
-    except OSError:
-        pass
-
-    if not ok:
-        print("ERROR: x264vfw codec not available via OpenCV.")
-        print("       Install x264vfw from https://sourceforge.net/projects/x264vfw/")
-        return False
-
     # Keep one PyAudio instance open for the session
     _pa = pyaudio.PyAudio()
 
-    print("Capture system initialised  (mss + x264vfw + pyaudiowpatch + ffmpeg).")
+    print("Capture system initialised  (mss + MJPG/ffmpeg libx264 + pyaudiowpatch).")
     return True
 
 
@@ -196,8 +183,9 @@ def _mux(video_path: str, loopback_wav, mic_wav, output_path: str):
     else:
         cmd += ["-map", "0:v"]
 
-    # ---- codecs: copy video, encode audio to AAC 192k ----
-    cmd += ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", output_path]
+    # ---- codecs: re-encode video MJPG→H.264, encode audio to AAC 192k ----
+    cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "192k", output_path]
 
     print("Muxing video + audio ...")
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -225,12 +213,15 @@ def _capture_loop(config: dict):
     out_dir = config["output_path"]
     os.makedirs(out_dir, exist_ok=True)
 
+    global current_temp_video, last_output_file
+
     stamp   = int(time.time())
     tmp_dir = tempfile.gettempdir()
     vid_tmp = os.path.join(tmp_dir, f"d264_video_{stamp}.avi")
     lb_wav  = os.path.join(tmp_dir, f"d264_loopback_{stamp}.wav")
     mic_wav = os.path.join(tmp_dir, f"d264_mic_{stamp}.wav")
     final   = os.path.join(out_dir, f"capture-{stamp}.mkv")
+    current_temp_video = vid_tmp
 
     # ---- Identify audio devices ----
     loopback_info = _get_loopback_device(_pa)
@@ -265,11 +256,11 @@ def _capture_loop(config: dict):
         audio_threads.append(t)
 
     # ---- Open video writer ----
-    fourcc = cv2.VideoWriter_fourcc(*"X264")
+    fourcc = cv2.VideoWriter_fourcc(*"MJPG")   # reliable everywhere; ffmpeg re-encodes to H.264
     writer = cv2.VideoWriter(vid_tmp, fourcc, fps, (w, h))
 
     if not writer.isOpened():
-        print("ERROR: VideoWriter failed to open.  Recording aborted.")
+        print("ERROR: VideoWriter (MJPG) failed to open.  Recording aborted.")
         stop_audio.set()
         for t in audio_threads:
             t.join()
@@ -320,6 +311,8 @@ def _capture_loop(config: dict):
         except OSError:
             pass
 
+    last_output_file   = final
+    current_temp_video = None
     print(f"Recording saved: {final}")
 
 
@@ -327,14 +320,17 @@ def _capture_loop(config: dict):
 # Public API  (called by launcher.py)
 # ---------------------------------------------------------------------------
 def start_capture(config: dict):
-    global is_capturing, capture_thread
+    global is_capturing, capture_thread, capture_start_time, last_output_file, current_temp_video
 
     if is_capturing:
         print("Already capturing.")
         return
 
-    is_capturing   = True
-    capture_thread = threading.Thread(target=_capture_loop, args=(config,), daemon=True)
+    last_output_file   = None
+    current_temp_video = None
+    capture_start_time = time.time()
+    is_capturing       = True
+    capture_thread     = threading.Thread(target=_capture_loop, args=(config,), daemon=True)
     capture_thread.start()
 
 
