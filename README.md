@@ -2,7 +2,7 @@
 Statue: Alpha - Restart underway.
 
 ### Description
-x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~3.12.x. Batch launched with menu for, install or run. No GUI, intended to be used on secondary display, while recording primary display. Intended to have quality/optimal/HighCompression options for audio/video, having simpler inteface with comprihensive researched parameters behind.
+x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~3.12.x. Batch launched with menu for, install or run. No GUI, intended to be used on secondary display, while recording primary display. Intended to have quality/optimal/HighCompression options for audio/video, having researched parameters behind simple configuration.
 
 ### Media
 - Main menu will be like this...
@@ -35,6 +35,38 @@ x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~
 
 -------------------------------------------------------------------------------
    Selection; Menu Options = 1-4, Quit = Q:
+```
+- Options Menu, now with 7 options...
+```
+===============================================================================
+   Desktop-264-Capture : Configure Settings
+===============================================================================
+
+
+
+   1) Resolution         : 1920x1080   (cycles: 1080p / 720p / 480p)
+
+   2) FPS                : 30   (cycles: 30 / 45 / 60)
+
+   3) Video Compression  : Optimal Performance
+
+   4) Audio Bitrate      : 192 kbps   (cycles: 96 / 128 / 160 / 192 / 256)
+
+   5) Audio Compression  : Optimal Performance
+
+   6) Output Directory   : Output
+
+   7) Container Format   : MP4   (cycles: MKV / MP4)
+
+
+
+-------------------------------------------------------------------------------
+   Selection; Options = 1-7, Back = B:
+
+
+
+
+
 ```
 
 ### Output
