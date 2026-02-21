@@ -120,4 +120,12 @@ The plan for the file structure...
 ```
 
 ### Development
-- Project restart with Claude Sonnet.
+Project restart with Claude Sonnet...
+1. Program needs testing/bugfixing.
+2. Program needs actual testing of recording some demo videos for my latest apps. (these will feature on youtube).
+
+### Done since restart
+- Rethink done.
+- Installer done.
+- Batch Improved.
+- Main program text interfacs improved.
