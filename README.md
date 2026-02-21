@@ -219,9 +219,8 @@ Selection; Menu Options = 1-4, Quit = Q:
 </details>
 
 ### Requirements
-- Windows ~8.1-10 - Programming towards Windows 8.1-10 compatibility, testing on Windows 10.
-- Codec x264vfw - Codec must be installed from [SorceForge](https://sourceforge.net/projects/x264vfw/)
-- Python - Testing on Python 3.12.x
+- Windows 8.1-10 - PClaude Sonnet assessed compatibility ranges, testing on Windows 10.
+- Python 3.7-3.12 - Claude Sonnet assessed compatibility ranges, testing on v3.12.x 
 
 ### Structure
 The plan for the file structure...
@@ -240,8 +239,10 @@ Project restart with Claude Sonnet...
 1. Program needs testing/bugfixing.
 2. Program needs actual testing of recording some demo videos for my latest apps. (these will feature on youtube).
 
-### Done since restart
-- Rethink done.
-- Installer done.
-- Batch Improved.
-- Main program text interfacs improved.
+### Credits
+- mss / python-mss - Ultra-fast cross-platform screen-capture library using DXGI Desktop Duplication on Windows.
+- OpenCV / opencv-python - Computer vision library used here for writing raw screen frames into an MJPG intermediate video file via VideoWriter.
+- NumPy / numpy - Fundamental array library; used to convert raw BGRA pixel data from mss into BGR frames for OpenCV.
+- pyaudiowpatch / pyaudiowpatch - Fork of PyAudio with WASAPI loopback support for Windows, enabling system audio and microphone capture in parallel threads.
+- imageio-ffmpeg / imageio-ffmpeg - Bundles a self-contained ffmpeg binary (including libx264) so no separate ffmpeg installation is required. Used for all muxing and final H.264 encoding.
+- FFmpeg (via imageio-ffmpeg) - The underlying multimedia engine. Handles re-encoding the MJPG intermediate to libx264, mixing loopback and microphone audio with amix, applying duplicate-frame dropping via mpdecimate, and writing the final MKV/MP4 container.
