@@ -1,8 +1,11 @@
 # scripts/recorder.py
-# Video : mss (DXGI Desktop Duplication) → OpenCV VideoWriter (MJPG) → ffmpeg libx264 (H.264)
+# Video : mss (DXGI Desktop Duplication) -> OpenCV VideoWriter (MJPG) -> ffmpeg libx264 (H.264)
 # Audio : pyaudiowpatch WASAPI loopback (system out) + mic (system in)
-#         both captured in parallel threads → separate temp WAVs
-# Mux   : imageio_ffmpeg binary combines video + mixed audio → final .mkv
+#         both captured in parallel threads -> separate temp WAVs
+# Mux   : imageio_ffmpeg binary combines video + mixed audio -> final .mkv
+#
+# Encoding quality is driven by the video_compression and audio_compression
+# profiles stored in persistent.json and resolved through configure.py.
 
 import os
 import tempfile
@@ -14,6 +17,8 @@ import cv2
 import mss
 import numpy as np
 import pyaudiowpatch as pyaudio
+
+import scripts.configure as configure
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -66,7 +71,7 @@ def _get_loopback_device(pa: pyaudio.PyAudio):
     try:
         wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
     except OSError:
-        print("WARNING: WASAPI not available – system audio will not be recorded.")
+        print("WARNING: WASAPI not available - system audio will not be recorded.")
         return None
 
     default_out = pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
@@ -84,10 +89,10 @@ def _get_default_mic(pa: pyaudio.PyAudio):
     try:
         wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
     except OSError:
-        print("WARNING: WASAPI not available – microphone will not be recorded.")
+        print("WARNING: WASAPI not available - microphone will not be recorded.")
         return None
 
-    idx  = wasapi["defaultInputDevice"]
+    idx = wasapi["defaultInputDevice"]
     if idx < 0:
         print("WARNING: no default input device found.")
         return None
@@ -99,7 +104,7 @@ def _get_default_mic(pa: pyaudio.PyAudio):
 # Audio capture thread
 # ---------------------------------------------------------------------------
 def _audio_capture_thread(pa: pyaudio.PyAudio, device_info: dict,
-                           wav_path: str, stop_event: threading.Event):
+                          wav_path: str, stop_event: threading.Event):
     """
     Stream audio from device_info into a WAV file.
     For loopback devices pyaudiowpatch exposes output channels as input channels.
@@ -149,13 +154,18 @@ def _audio_capture_thread(pa: pyaudio.PyAudio, device_info: dict,
 
 
 # ---------------------------------------------------------------------------
-# ffmpeg mux
+# ffmpeg mux  (now config-driven)
 # ---------------------------------------------------------------------------
-def _mux(video_path: str, loopback_wav, mic_wav, output_path: str):
+def _mux(video_path: str, loopback_wav, mic_wav, output_path: str,
+         config: dict):
     """
-    Mux video (x264 stream, copied as-is) with up to two audio WAV sources.
-    System audio and microphone are blended with ffmpeg's amix filter.
-    Output container is MKV (flexible, no audio format restrictions).
+    Mux video (MJPG intermediate -> libx264 re-encode) with up to two
+    audio WAV sources.  System audio and microphone are blended with
+    ffmpeg's amix filter.  Output container is MKV.
+
+    Video params (preset, crf, tune, pix_fmt) come from the active
+    video_compression profile.  Audio bitrate is the effective value
+    after the audio_compression cap is applied.
     """
     import subprocess
     import imageio_ffmpeg
@@ -172,25 +182,42 @@ def _mux(video_path: str, loopback_wav, mic_wav, output_path: str):
             cmd += ["-i", wav]
             audio_src_indices.append(len(audio_src_indices) + 1)
 
-    # ---- filter graph ----
-    if len(audio_src_indices) == 2:
-        # Mix loopback + mic; normalize=0 keeps original levels, avoids clipping
-        fc = (f"[{audio_src_indices[0]}:a][{audio_src_indices[1]}:a]"
-              f"amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]")
-        cmd += ["-filter_complex", fc, "-map", "0:v", "-map", "[aout]"]
-    elif len(audio_src_indices) == 1:
-        cmd += ["-map", "0:v", f"-map", f"{audio_src_indices[0]}:a"]
-    else:
-        cmd += ["-map", "0:v"]
+    # ---- filter graph (video + audio) ----
+    # Video filters: mpdecimate drops duplicate frames, vsync vfr keeps
+    # variable framerate so those dropped frames actually save space.
+    video_filter = "mpdecimate"
 
-    # ---- codecs: re-encode video MJPG→H.264, encode audio to AAC 192k ----
-    cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "192k", output_path]
+    if len(audio_src_indices) == 2:
+        # Mix loopback + mic; normalize=0 keeps original levels
+        fc = (f"[0:v]{video_filter}[vout];"
+              f"[{audio_src_indices[0]}:a][{audio_src_indices[1]}:a]"
+              f"amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]")
+        cmd += ["-filter_complex", fc,
+                "-map", "[vout]", "-map", "[aout]",
+                "-vsync", "vfr"]
+    elif len(audio_src_indices) == 1:
+        cmd += ["-vf", video_filter,
+                "-vsync", "vfr",
+                "-map", "0:v", "-map", f"{audio_src_indices[0]}:a"]
+    else:
+        cmd += ["-vf", video_filter,
+                "-vsync", "vfr",
+                "-map", "0:v"]
+
+    # ---- video codec: libx264 with profile-driven params ----
+    video_params = configure.get_video_params(config)
+    cmd += ["-c:v", "libx264"] + video_params
+
+    # ---- audio codec: AAC at effective bitrate ----
+    bitrate_kbps = configure.effective_audio_bitrate(config)
+    cmd += ["-c:a", "aac", "-b:a", f"{bitrate_kbps}k"]
+
+    cmd += [output_path]
 
     print("Muxing video + audio ...")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print("WARNING: ffmpeg mux failed – video-only fallback saved.")
+        print("WARNING: ffmpeg mux failed - video-only fallback saved.")
         print(result.stderr[-2000:])
         try:
             import shutil
@@ -220,7 +247,16 @@ def _capture_loop(config: dict):
     vid_tmp = os.path.join(tmp_dir, f"d264_video_{stamp}.avi")
     lb_wav  = os.path.join(tmp_dir, f"d264_loopback_{stamp}.wav")
     mic_wav = os.path.join(tmp_dir, f"d264_mic_{stamp}.wav")
-    final   = os.path.join(out_dir, f"capture-{stamp}.mkv")
+
+    # Build date-based filename: Desktop_Video_YYYY_MM_DD.mkv
+    # If a file with the same date already exists, append _NNN counter.
+    date_str = time.strftime("%Y_%m_%d")
+    base     = os.path.join(out_dir, f"Desktop_Video_{date_str}")
+    final    = f"{base}.mkv"
+    counter  = 1
+    while os.path.exists(final):
+        final = f"{base}_{counter:03d}.mkv"
+        counter += 1
     current_temp_video = vid_tmp
 
     # ---- Identify audio devices ----
@@ -256,7 +292,7 @@ def _capture_loop(config: dict):
         audio_threads.append(t)
 
     # ---- Open video writer ----
-    fourcc = cv2.VideoWriter_fourcc(*"MJPG")   # reliable everywhere; ffmpeg re-encodes to H.264
+    fourcc = cv2.VideoWriter_fourcc(*"MJPG")   # reliable intermediate; ffmpeg re-encodes
     writer = cv2.VideoWriter(vid_tmp, fourcc, fps, (w, h))
 
     if not writer.isOpened():
@@ -267,7 +303,7 @@ def _capture_loop(config: dict):
         is_capturing = False
         return
 
-    print(f"Recording → {final}")
+    print(f"Recording -> {final}")
 
     frame_dur = 1.0 / fps
     next_tick = time.perf_counter()
@@ -298,11 +334,12 @@ def _capture_loop(config: dict):
     for t in audio_threads:
         t.join(timeout=5)
 
-    # ---- Mux to final file ----
+    # ---- Mux to final file (config-driven params) ----
     _mux(vid_tmp,
          lb_wav if loopback_info else None,
          mic_wav if mic_info     else None,
-         final)
+         final,
+         config)
 
     # Tidy temp files
     for p in (vid_tmp, lb_wav, mic_wav):
@@ -320,7 +357,8 @@ def _capture_loop(config: dict):
 # Public API  (called by launcher.py)
 # ---------------------------------------------------------------------------
 def start_capture(config: dict):
-    global is_capturing, capture_thread, capture_start_time, last_output_file, current_temp_video
+    global is_capturing, capture_thread, capture_start_time
+    global last_output_file, current_temp_video
 
     if is_capturing:
         print("Already capturing.")
@@ -330,7 +368,8 @@ def start_capture(config: dict):
     current_temp_video = None
     capture_start_time = time.time()
     is_capturing       = True
-    capture_thread     = threading.Thread(target=_capture_loop, args=(config,), daemon=True)
+    capture_thread     = threading.Thread(target=_capture_loop, args=(config,),
+                                         daemon=True)
     capture_thread.start()
 
 
@@ -343,14 +382,14 @@ def stop_capture():
 
     is_capturing = False
     if capture_thread and capture_thread.is_alive():
-        print("Finalising recording (muxing audio) – please wait ...")
+        print("Finalising recording (muxing audio) - please wait ...")
         capture_thread.join(timeout=60)
 
     capture_thread = None
 
 
 def cleanup():
-    """Called on application exit – releases PyAudio."""
+    """Called on application exit - releases PyAudio."""
     if is_capturing:
         stop_capture()
     global _pa

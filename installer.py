@@ -172,6 +172,9 @@ def write_default_config():
         "fps": 30,
         "codec": "X264",
         "output_path": "Output",
+        "video_compression": "Optimal Performance",
+        "audio_compression": "Optimal Performance",
+        "audio_bitrate": 192,
     }
     with open(CFG_PATH, "w") as f:
         json.dump(cfg, f, indent=4)
