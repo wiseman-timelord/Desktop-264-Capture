@@ -623,9 +623,9 @@ def show_stopping_before_exit():
 def show_goodbye():
     cls()
     header()
-    blank(12)
+    blank(11)
     print("   Goodbye.")
-    blank(12)
+    blank(11)
     footer()
     time.sleep(1)
 
