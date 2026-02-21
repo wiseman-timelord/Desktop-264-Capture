@@ -5,7 +5,7 @@ Statue: Alpha - Restart underway.
 x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~3.12.x. Batch launched with menu for, install or run. No GUI, intended to be used on secondary display, while recording primary display. Intended to have quality/optimal/HighCompression options for audio/video, having researched parameters behind simplified configuration. One would use this program for recording, gaming or application demonstration, etc, where one would want to be recording the primary display, and then editing later on the users own choice of video editor that supports, mp4 or mkv, file formats.
 
 ### Media
-- Main menu will be like this...
+- Main menu is like this...
 ```
 ===============================================================================
    Desktop-264-Capture
