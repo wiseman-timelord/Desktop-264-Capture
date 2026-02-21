@@ -14,7 +14,7 @@ x264vfw Desktop recording on Windows ~8.1-10
  Videos Folder:
      .\Output
 
- Folder Contents:
+ Recent Files:
     (empty)
     (empty)
     (empty)
