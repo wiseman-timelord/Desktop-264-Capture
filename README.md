@@ -71,7 +71,7 @@ Press ENTER to stop recording ...
 
 
 ```
-- Options Menu, now with 7 options...(v0.1)
+- Options Menu, now with 8 options...(v0.4)
 ```
 ===============================================================================
    Desktop-264-Capture : Configure Settings
@@ -80,26 +80,27 @@ Press ENTER to stop recording ...
 
 
 
-   1) Resolution         : 1920x1080   (cycles: 1080p / 720p / 480p)
+   1) Resolution         : 1280x720   (cycles: 1080p / 720p / 480p)
 
    2) FPS                : 30   (cycles: 30 / 45 / 60)
 
    3) Video Compression  : Optimal Performance
 
-   4) Audio Bitrate      : 192 kbps   (cycles: 96 / 128 / 160 / 192 / 256)
+   4) Audio Bitrate      : 160 kbps   (cycles: 96 / 128 / 160 / 192 / 256)
 
    5) Audio Compression  : Optimal Performance
 
-   6) Output Directory   : Output
+   6) Output Directory   : G:\Videos\Output
 
    7) Container Format   : MP4   (cycles: MKV / MP4)
+
+   8) 1Hr Video Splits   : False   (Save in 1Hr Segments)
 
 
 
 
 -------------------------------------------------------------------------------
-   Selection; Options = 1-7, Back = B:
-
+   Selection; Options = 1-8, Back = B:
 
 ```
 
