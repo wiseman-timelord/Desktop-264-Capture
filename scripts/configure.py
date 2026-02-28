@@ -143,6 +143,7 @@ DEFAULT_CONFIG = {
     "audio_compression": "Optimal Performance",
     "audio_bitrate":     192,
     "container_format":  "MKV",
+    "video_splits":      False,
 }
 
 

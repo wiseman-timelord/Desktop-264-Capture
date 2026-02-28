@@ -276,9 +276,10 @@ def recording_monitor(config):
     fps = config["fps"]
     out = config["output_path"]
 
-    vc_label = config.get("video_compression", "Optimal Performance")
-    ac_label = config.get("audio_compression", "Optimal Performance")
-    ab_kbps  = configure.effective_audio_bitrate(config)
+    vc_label     = config.get("video_compression", "Optimal Performance")
+    ac_label     = config.get("audio_compression", "Optimal Performance")
+    ab_kbps      = configure.effective_audio_bitrate(config)
+    splits_on    = config.get("video_splits", False)
 
     # Drain any buffered keypress so the loop doesn't exit immediately
     while msvcrt.kbhit():
@@ -299,9 +300,13 @@ def recording_monitor(config):
         print(f"   Video Profile : {vc_label}")
         print(f"   Audio Profile : {ac_label}  ({ab_kbps} kbps)")
         blank()
+        if splits_on:
+            seg_elapsed = recorder.current_segment_elapsed()
+            print(f"   Segment       : {recorder.current_segment_num}  "
+                  f"[{fmt_time(seg_elapsed)} / 1:00:00]")
         print(f"   Temp Size     : {fmt_bytes(tmp_size)}")
         print(f"   Output Dir    : {out}")
-        blank(7)
+        blank(6 if splits_on else 7)
         footer()
         print("Press ENTER to stop recording ...")
         
@@ -328,8 +333,9 @@ def recording_monitor(config):
     configure.recording_start_time = None
 
     # Results screen
-    output_file = recorder.last_output_file
-    file_size   = 0
+    output_file   = recorder.last_output_file
+    seg_count     = recorder.last_segment_count
+    file_size     = 0
     if output_file and os.path.exists(output_file):
         file_size = os.path.getsize(output_file)
 
@@ -337,9 +343,16 @@ def recording_monitor(config):
     header("Recording Complete")
     blank(10)
     if output_file:
-        print(f"   File    : {output_file}")
-        blank(1)
-        print(f"   Size    : {fmt_bytes(file_size)}")
+        if seg_count and seg_count > 1:
+            print(f"   Segments: {seg_count} files saved to {config['output_path']}")
+            blank(1)
+            print(f"   Last Seg: {output_file}")
+            blank(1)
+            print(f"   Last Size: {fmt_bytes(file_size)}")
+        else:
+            print(f"   File    : {output_file}")
+            blank(1)
+            print(f"   Size    : {fmt_bytes(file_size)}")
     else:
         print("   WARNING : Output file not found - check Output folder.")
     blank(10)
@@ -357,7 +370,7 @@ def configure_settings_screen(config):
         res = config["resolution"]
         cls()
         header("Configure Settings")
-        blank(5)
+        blank(4)
 
         print(f"   1) Resolution         : {res['width']}x{res['height']}"
               f"   (cycles: 1080p / 720p / 480p)")
@@ -376,9 +389,13 @@ def configure_settings_screen(config):
         blank()
         print(f"   7) Container Format   : {config.get('container_format', 'MKV')}"
               f"   (cycles: MKV / MP4)")
-        blank(5)
+        blank()
+        splits_val = "True" if config.get("video_splits", False) else "False"
+        print(f"   8) 1Hr Video Splits   : {splits_val}"
+              f"   (Save in 1Hr Segments)")
+        blank(4)
         footer()
-        choice = input("   Selection; Options = 1-7, Back = B: ").strip()
+        choice = input("   Selection; Options = 1-8, Back = B: ").strip()
 
         # ---- 1) Resolution (cycle) ----
         if choice == "1":
@@ -429,6 +446,11 @@ def configure_settings_screen(config):
             idx  = opts.index(cur) if cur in opts else 0
             idx  = (idx + 1) % len(opts)
             config["container_format"] = opts[idx]
+            configure.save_configuration(config)
+
+        # ---- 8) 1Hr video splits (toggle) ----
+        elif choice == "8":
+            config["video_splits"] = not config.get("video_splits", False)
             configure.save_configuration(config)
 
         elif choice.upper() == "B":

@@ -32,9 +32,22 @@ AUDIO_CHUNK  = 1024     # frames per read
 is_capturing       = False
 capture_thread     = None
 _pa                = None    # PyAudio instance, kept alive for the session
-last_output_file   = None    # path of most recently completed recording
+last_output_file   = None    # path of most recently completed recording / segment
+last_segment_count = 0       # how many segments were saved in the last session
 capture_start_time = None    # time.time() when current capture started
 current_temp_video = None    # path of the in-progress temp AVI (for size polling)
+current_segment_num    = 1   # 1-based segment counter (live, for monitor display)
+_segment_start_time    = None  # time.time() when current segment started
+
+
+# ---------------------------------------------------------------------------
+# Segment elapsed helper  (called by displays.recording_monitor)
+# ---------------------------------------------------------------------------
+def current_segment_elapsed() -> float:
+    """Seconds elapsed in the current recording segment (0.0 if not recording)."""
+    if _segment_start_time is None:
+        return 0.0
+    return time.time() - _segment_start_time
 
 
 # ---------------------------------------------------------------------------
@@ -230,10 +243,26 @@ def _mux(video_path: str, loopback_wav, mic_wav, output_path: str,
 
 
 # ---------------------------------------------------------------------------
-# Main capture loop
+# Segment capture  (inner loop – captures one segment worth of frames)
 # ---------------------------------------------------------------------------
-def _capture_loop(config: dict):
-    global is_capturing
+SPLIT_DURATION = 3600.0   # seconds per segment (1 hour)
+
+
+def _capture_segment(config: dict, segment_num: int,
+                     split_limit: float | None) -> str:
+    """
+    Capture frames into one temp AVI for up to `split_limit` seconds
+    (or indefinitely when split_limit is None).
+
+    Returns:
+        "split"  – stopped because the segment time limit was reached
+                   (is_capturing is still True)
+        "done"   – stopped because is_capturing went False
+    """
+    global current_temp_video, last_output_file, _segment_start_time
+    global current_segment_num
+
+    current_segment_num = segment_num
 
     w       = config["resolution"]["width"]
     h       = config["resolution"]["height"]
@@ -241,40 +270,43 @@ def _capture_loop(config: dict):
     out_dir = config["output_path"]
     os.makedirs(out_dir, exist_ok=True)
 
-    global current_temp_video, last_output_file
-
     stamp   = int(time.time())
     tmp_dir = tempfile.gettempdir()
-    vid_tmp = os.path.join(tmp_dir, f"d264_video_{stamp}.avi")
-    lb_wav  = os.path.join(tmp_dir, f"d264_loopback_{stamp}.wav")
-    mic_wav = os.path.join(tmp_dir, f"d264_mic_{stamp}.wav")
+    vid_tmp = os.path.join(tmp_dir, f"d264_video_{stamp}_s{segment_num:03d}.avi")
+    lb_wav  = os.path.join(tmp_dir, f"d264_loopback_{stamp}_s{segment_num:03d}.wav")
+    mic_wav = os.path.join(tmp_dir, f"d264_mic_{stamp}_s{segment_num:03d}.wav")
 
-    # Build date-based filename: Desktop_Video_YYYY_MM_DD.<ext>
-    # Extension is driven by the container_format setting (MKV or MP4).
-    # If a file with the same date already exists, append _NNN counter.
-    container = config.get("container_format", "MKV").lower()   # "mkv" or "mp4"
-    date_str = time.strftime("%Y_%m_%d")
-    base     = os.path.join(out_dir, f"Desktop_Video_{date_str}")
-    final    = f"{base}.{container}"
-    counter  = 1
+    # Build output filename.
+    # When splits are enabled every segment always gets the _SNNN suffix so
+    # the files sort cleanly even when there ends up being only one segment.
+    container = config.get("container_format", "MKV").lower()
+    date_str  = time.strftime("%Y_%m_%d")
+    if split_limit is not None:
+        base_name = f"Desktop_Video_{date_str}_S{segment_num:03d}"
+    else:
+        base_name = f"Desktop_Video_{date_str}"
+    base  = os.path.join(out_dir, base_name)
+    final = f"{base}.{container}"
+    ctr   = 1
     while os.path.exists(final):
-        final = f"{base}_{counter:03d}.{container}"
-        counter += 1
+        final = f"{base}_{ctr:03d}.{container}"
+        ctr  += 1
+
     current_temp_video = vid_tmp
 
     # ---- Identify audio devices ----
     loopback_info = _get_loopback_device(_pa)
     mic_info      = _get_default_mic(_pa)
 
-    if loopback_info:
-        print(f"  System audio  : {loopback_info['name']}")
-    else:
-        print("  System audio  : unavailable")
-
-    if mic_info:
-        print(f"  Microphone    : {mic_info['name']}")
-    else:
-        print("  Microphone    : unavailable")
+    if segment_num == 1:
+        if loopback_info:
+            print(f"  System audio  : {loopback_info['name']}")
+        else:
+            print("  System audio  : unavailable")
+        if mic_info:
+            print(f"  Microphone    : {mic_info['name']}")
+        else:
+            print("  Microphone    : unavailable")
 
     # ---- Start audio threads ----
     stop_audio    = threading.Event()
@@ -295,26 +327,35 @@ def _capture_loop(config: dict):
         audio_threads.append(t)
 
     # ---- Open video writer ----
-    fourcc = cv2.VideoWriter_fourcc(*"MJPG")   # reliable intermediate; ffmpeg re-encodes
+    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
     writer = cv2.VideoWriter(vid_tmp, fourcc, fps, (w, h))
 
     if not writer.isOpened():
-        print("ERROR: VideoWriter (MJPG) failed to open.  Recording aborted.")
+        print(f"ERROR: VideoWriter (MJPG) failed to open for segment {segment_num}. "
+              "Segment aborted.")
         stop_audio.set()
         for t in audio_threads:
             t.join()
-        is_capturing = False
-        return
+        return "done"
 
-    print(f"Recording -> {final}")
+    seg_label = f"S{segment_num:03d}" if split_limit else "recording"
+    print(f"Recording {seg_label} -> {final}")
 
-    frame_dur = 1.0 / fps
-    next_tick = time.perf_counter()
+    frame_dur  = 1.0 / fps
+    next_tick  = time.perf_counter()
+    _segment_start_time = time.time()
+    result     = "done"   # default: stopped by is_capturing flag
 
     with mss.mss() as sct:
         monitor = sct.monitors[1]   # primary desktop
 
         while is_capturing:
+            # Check segment time limit
+            if split_limit is not None:
+                if (time.time() - _segment_start_time) >= split_limit:
+                    result = "split"
+                    break
+
             now = time.perf_counter()
             if now < next_tick:
                 time.sleep(max(0.0, next_tick - now - 0.001))
@@ -337,12 +378,11 @@ def _capture_loop(config: dict):
     for t in audio_threads:
         t.join(timeout=5)
 
-    # ---- Mux to final file (config-driven params) ----
+    # ---- Mux to final file ----
     _mux(vid_tmp,
          lb_wav if loopback_info else None,
          mic_wav if mic_info     else None,
-         final,
-         config)
+         final, config)
 
     # Tidy temp files
     for p in (vid_tmp, lb_wav, mic_wav):
@@ -353,7 +393,35 @@ def _capture_loop(config: dict):
 
     last_output_file   = final
     current_temp_video = None
-    print(f"Recording saved: {final}")
+    _segment_start_time = None
+    print(f"Segment saved: {final}")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Main capture loop  (outer – manages segment iteration)
+# ---------------------------------------------------------------------------
+def _capture_loop(config: dict):
+    global is_capturing, last_segment_count, current_segment_num
+
+    splits_enabled = config.get("video_splits", False)
+    split_limit    = SPLIT_DURATION if splits_enabled else None
+
+    segment_num    = 1
+    last_segment_count = 0
+
+    while is_capturing:
+        outcome = _capture_segment(config, segment_num, split_limit)
+        last_segment_count += 1
+
+        if outcome == "split" and is_capturing:
+            segment_num += 1
+            # Brief pause so filesystem flushes before next segment starts
+            time.sleep(0.25)
+        else:
+            break   # stopped by user or error
+
+    current_segment_num = 1   # reset for next session
 
 
 # ---------------------------------------------------------------------------
@@ -362,17 +430,21 @@ def _capture_loop(config: dict):
 def start_capture(config: dict):
     global is_capturing, capture_thread, capture_start_time
     global last_output_file, current_temp_video
+    global last_segment_count, current_segment_num, _segment_start_time
 
     if is_capturing:
         print("Already capturing.")
         return
 
-    last_output_file   = None
-    current_temp_video = None
-    capture_start_time = time.time()
-    is_capturing       = True
-    capture_thread     = threading.Thread(target=_capture_loop, args=(config,),
-                                         daemon=True)
+    last_output_file    = None
+    current_temp_video  = None
+    last_segment_count  = 0
+    current_segment_num = 1
+    _segment_start_time = None
+    capture_start_time  = time.time()
+    is_capturing        = True
+    capture_thread      = threading.Thread(target=_capture_loop, args=(config,),
+                                           daemon=True)
     capture_thread.start()
 
 
