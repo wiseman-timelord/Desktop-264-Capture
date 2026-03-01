@@ -5,20 +5,20 @@ Statue: Beta - Project resume was a success, program has been tested and is full
 x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~3.12.x. Batch launched with menu for, install or run. No GUI, intended to be used on secondary display, while recording primary display. Intended to have quality/optimal/HighCompression options for audio/video, having researched parameters behind simplified configuration. One would use this program for recording, gaming or application demonstration, etc, where one would want to be recording the primary display, and then editing later on the users own choice of video editor that supports, mp4 or mkv, file formats.
 
 ### Media
-- Main menu is like this...(v0.1)
+- Main menu, showing recorded 4 Hour video in 1 Hour segments...(v0.4)
 ```
 ===============================================================================
    Desktop-264-Capture
 ===============================================================================
 
  Videos Folder:
-     .\Output
+     G:\Videos\Output
 
  Recent Files:
-    Desktop_Video_2026_02_21.mp4  (348.8 KB)
-    (empty)
-    (empty)
-    (empty)
+    Desktop_Video_2026_03_01_S004.mp4  (1.05 GB)
+    Desktop_Video_2026_03_01_S003.mp4  (1.58 GB)
+    Desktop_Video_2026_03_01_S002.mp4  (1.42 GB)
+    Desktop_Video_2026_03_01_S001.mp4  (1.49 GB)
     (empty)
 
 
@@ -35,7 +35,6 @@ x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~
 
 -------------------------------------------------------------------------------
 Selection; Menu Options = 1-4, Quit = Q:
-
 
 ```
 - The display while recording...(v0.2)
