@@ -286,9 +286,10 @@ def recording_monitor(config):
         msvcrt.getwch()
 
     while configure.is_recording:
-        elapsed  = time.time() - configure.recording_start_time
-        tmp      = recorder.current_temp_video
-        tmp_size = os.path.getsize(tmp) if (tmp and os.path.exists(tmp)) else 0
+        elapsed    = time.time() - configure.recording_start_time
+        tmp        = recorder.current_temp_video
+        tmp_size   = os.path.getsize(tmp) if (tmp and os.path.exists(tmp)) else 0
+        mux_pending = recorder.pending_mux_count
 
         cls()
         header("Recording")
@@ -306,7 +307,12 @@ def recording_monitor(config):
                   f"[{fmt_time(seg_elapsed)} / 1:00:00]")
         print(f"   Temp Size     : {fmt_bytes(tmp_size)}")
         print(f"   Output Dir    : {out}")
-        blank(6 if splits_on else 7)
+        if mux_pending > 0:
+            # Use the blank slot that would otherwise be empty to show mux status
+            print(f"   Muxing BG     : {mux_pending} segment(s) encoding ...")
+            blank(4 if splits_on else 5)
+        else:
+            blank(5 if splits_on else 6)
         footer()
         print("Press ENTER to stop recording ...")
         
@@ -324,7 +330,7 @@ def recording_monitor(config):
     header("Recording")
     blank(8)
     print("   Stopping capture ...")
-    print("   Muxing audio + video - please wait ...")
+    print("   Finalising segments (background mux) - please wait ...")
     blank()
     footer()
 
@@ -578,10 +584,27 @@ def _output_dir_screen(config):
 def system_info_screen():
     cls()
     header("System Information")
-    blank(5)
+    blank(3)
 
     print(f"   Python   : {sys.version.split()[0]}")
     blank(1)
+
+    # CPU info (populated by recorder at init time)
+    try:
+        ci = recorder.get_cpu_info()
+        print(f"   CPU      : {ci['name']}")
+        cores_str = f"{ci['logical_cores']} logical cores"
+        simd_parts = []
+        if ci.get("sse2"):    simd_parts.append("SSE2")
+        if ci.get("avx"):     simd_parts.append("AVX")
+        if ci.get("avx2"):    simd_parts.append("AVX2")
+        if ci.get("avx512f"): simd_parts.append("AVX-512F")
+        simd_str = ", ".join(simd_parts) if simd_parts else "none detected"
+        print(f"   Cores    : {cores_str}   SIMD: {simd_str}")
+    except Exception:
+        print("   CPU      : detection unavailable")
+    blank(1)
+
     try:
         import cv2
         print(f"   OpenCV   : {cv2.__version__}")
@@ -601,11 +624,13 @@ def system_info_screen():
     except Exception:
         print("   ffmpeg   : not found")
     blank(1)
-    print("   Encoding : MJPG intermediate -> libx264 via ffmpeg")
+    print("   Encoding : MJPG intermediate -> libx264 via ffmpeg (-threads 0)")
     blank(1)
     print(f"   Output   : {DEFAULT_OUTPUT}")
+    blank(1)
+    print("   Segments : pipelined – mux runs in background while next segment captures")
 
-    blank(6)
+    blank(3)
     footer()
     input("   Press ENTER to continue ... ")
 
