@@ -70,7 +70,7 @@ Press ENTER to stop recording ...
 
 
 ```
-- Options Menu, now with 8 options...(v0.4)
+- Options Menu, now with 8 options...(v0.4.2)
 ```
 ==============================================================================
    Desktop-264-Capture : Configure Settings
