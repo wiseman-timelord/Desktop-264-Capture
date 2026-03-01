@@ -2,7 +2,7 @@
 Statue: Beta - Project resume was a success, program has been tested and is fully working, and things are being improved upon.
 
 ### Description
-x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~3.12.x. Batch launched with menu for, install or run. No GUI, intended to be used on secondary display, while recording primary display. Intended to have quality/optimal/HighCompression options for audio/video, having researched parameters behind simplified configuration. One would use this program for recording, gaming or application demonstration, etc, where one would want to be recording the primary display, and then editing later on the users own choice of video editor that supports, mp4 or mkv, file formats.
+x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~3.12.x. Batch launched with menu for, install or run. No GUI, intended to be used on secondary display, while recording primary display. Intended to have quality/optimal/HighCompression options for audio/video, having researched parameters behind simplified configuration. One would use this program for recording, gaming or application demonstration, etc, where one would want to be recording the primary display, and then editing later on the users own choice of video editor that supports, mp4 or mkv, file formats, and then after saving the final movie, when it is time to move on to creating a next video, one would be purging the raw recordings, in order to keep things tidy. 
 
 ### Media
 - Main menu, showing recorded 4 Hour video in 1 Hour segments, sizes "1080P" with quality at "Optimal"...(v0.4)
@@ -276,8 +276,7 @@ The plan for the file structure...
 
 ### Development
 Project restart with Claude Sonnet...
-1. Program needs testing/bugfixing.
-2. Program needs actual testing of recording some demo videos for my latest apps. (these will feature on youtube).
+- Doing testing/bugfixing/improvement since v0.3, in the creation of 4 hour RimWorld videos. There have been some optimizations to, speed up saving and enable seamless segmented recording transitions. 
 
 ### Credits
 - mss / python-mss - Ultra-fast cross-platform screen-capture library using DXGI Desktop Duplication on Windows.
