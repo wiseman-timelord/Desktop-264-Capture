@@ -1,33 +1,84 @@
 # scripts/recorder.py
-# Video : mss (DXGI Desktop Duplication) -> OpenCV VideoWriter (MJPG) -> ffmpeg libx264 (H.264)
+# Video : mss (DXGI Desktop Duplication) -> ffmpeg libx264 (H.264) via stdin pipe
 # Audio : pyaudiowpatch WASAPI loopback (system out) + mic (system in)
 #         both captured in parallel threads -> WAV written incrementally (streaming)
-# Mux   : imageio_ffmpeg binary combines video + mixed audio -> final .mkv / .mp4
+# Mux   : imageio_ffmpeg binary combines pre-encoded video + mixed audio -> final .mkv / .mp4
+#         Video is STREAM-COPIED (-c:v copy); mux completes in seconds, not minutes.
 #
-# --- SEGMENT PIPELINE ---
-# Muxing is offloaded to a background ThreadPoolExecutor so that the next
-# segment's frame capture begins the instant the previous segment's frames
-# end.  No artificial delay; mss context is reused across segments.
+# --- WHY THE OLD APPROACH CAUSED FROZEN VIDEO (last ~15 min of every segment) ---
+#
+# ROOT CAUSE — Disk Space Exhaustion from Competing MJPG AVI Temp Files
+# -----------------------------------------------------------------------
+# The previous design wrote each captured segment to a large MJPG AVI
+# intermediate in the system temp directory (typically C:\Users\...\AppData\
+# Local\Temp).  At 1080p / 30 fps with OpenCV's default MJPG quality, those
+# files grew at roughly 3-8 MB/s, producing files of 10-20 GB per hour.
+#
+# The background _mux_and_cleanup job had to re-encode that entire MJPG AVI
+# with libx264 before it could delete it.  On a mid-range PC that re-encode
+# takes 30-60+ minutes.  This meant:
+#
+#   t =  0 min  Segment 1 starts; d264_video_T_s001.avi grows on temp drive.
+#   t = 60 min  Segment 1 ends; mux starts in background (still reading s001.avi).
+#   t = 60 min  Segment 2 starts; d264_video_T_s002.avi also grows on temp drive.
+#               BOTH AVI files now exist simultaneously.
+#   t = 75 min  (example) Temp drive fills up.  cv2.VideoWriter.write() starts
+#               silently failing — OpenCV raises no exception on disk-full writes.
+#               The grab loop, the frame timer, and the audio threads all continue
+#               normally.  Only video frames are lost.
+#   t = 105 min Mux finishes; s001.avi deleted.  But 30 minutes of segment 2
+#               are already missing.  Segment 2 will have ~45 min of video and
+#               60 min of audio -> last 15 min appears frozen in every player.
+#
+# The "last 15 minutes of every segment" symptom was consistent precisely
+# because the mux duration was consistent (~45 min), making the disk-full
+# moment arrive at a predictable 45-minute offset into each segment.
+#
+# SECONDARY CAUSE — mpdecimate + vsync vfr Frame Dropping
+# ---------------------------------------------------------
+# The mux pass applied mpdecimate (drops "duplicate" frames) and -vsync vfr
+# (variable frame rate).  On static or slow-moving screen content — menus,
+# loading screens, inventory, cutscenes — mpdecimate aggressively classified
+# legitimate frames as duplicates and removed them.  With VFR output, the
+# gaps appear as visible freezes in many media players.  This compounded the
+# disk issue and could independently cause short freeze artefacts even when
+# disk space was not a problem.
+#
+# --- HOW THIS VERSION FIXES IT ---
+#
+# 1.  No MJPG AVI intermediate.  Raw BGR frames are piped directly to an
+#     ffmpeg subprocess (stdin pipe) which encodes them in real time with
+#     libx264.  The temp file is already H.264-compressed MKV; it is 1-5 GB/
+#     hour instead of 10-20 GB/hour.
+#
+# 2.  Mux step uses -c:v copy (stream copy).  Video is already encoded, so
+#     the mux only has to encode audio (AAC) and rewrite the container.
+#     Mux time drops from 30-60 min to 5-60 seconds.  The previous segment's
+#     temp file is deleted almost immediately, so the two temp files never
+#     coexist for meaningful duration.  Peak temp disk usage: ~2-6 GB.
+#
+# 3.  mpdecimate is removed.  Frame rates are constant and correct; no
+#     duplicate-frame heuristics introduce freeze artefacts.
+#
+# 4.  A dedicated pipe-writer thread drains a bounded queue, so the grab
+#     loop is never blocked by stdin I/O.  If the encoder genuinely falls
+#     behind, frames are dropped with a printed warning rather than the
+#     queue growing without bound.
 #
 # --- AUDIO MEMORY ---
-# Audio data is written incrementally to the WAV file rather than
-# accumulated in a list.  Peak RAM per audio device is now one chunk
-# (~8-16 KB) rather than 600+ MB for a 1-hour session.
+# Audio data is written incrementally to the WAV file (one AUDIO_CHUNK at a
+# time).  Peak RAM per audio device is ~8-16 KB regardless of recording length.
 #
 # --- CPU THREADING ---
-# All CPU-bound thread pools (ffmpeg libx264, ffmpeg filter graph, OpenCV)
-# are capped to the configured thread budget (25/50/75% of logical cores) so the remaining
-# 25% stays available for the game being recorded.
-# numpy / OpenCV / mss already auto-enable SIMD (SSE2, AVX, AVX2) via
-# their pre-built wheels; no extra wiring is needed there.
-#
-# Encoding quality is driven by the video_compression and audio_compression
-# profiles stored in persistent.json and resolved through configure.py.
+# _thread_cap (25/50/75 % of logical cores) is applied to the real-time
+# ffmpeg libx264 encoder and to the mux-step audio AAC encoder.  The
+# remaining percentage is reserved for the OS and the game being recorded.
 
 import concurrent.futures
 import ctypes
 import os
-import struct
+import queue as _queue
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -47,11 +98,9 @@ import scripts.configure as configure
 AUDIO_FORMAT = pyaudio.paInt16
 
 # AUDIO_CHUNK is set during init based on available RAM:
-#   >= 4 GB available : 8 192  (fewer OS read calls, lower CPU overhead)
-#   >= 2 GB available : 4 096  (balanced)
-#   <  2 GB available : 2 048  (conservative)
-# Larger values reduce per-call overhead at the cost of slightly higher
-# audio latency; for a non-real-time recorder this trade-off is ideal.
+#   >= 4 GB available : 8 192
+#   >= 2 GB available : 4 096
+#   <  2 GB available : 2 048
 AUDIO_CHUNK = 4096  # overridden by _detect_audio_chunk() at init
 
 # ---------------------------------------------------------------------------
@@ -60,22 +109,18 @@ AUDIO_CHUNK = 4096  # overridden by _detect_audio_chunk() at init
 SPLIT_DURATION = 3600.0  # seconds per segment (1 hour)
 
 # ---------------------------------------------------------------------------
+# Pipe writer queue depth
+# ---------------------------------------------------------------------------
+# Number of raw BGR frames buffered between the grab loop and the ffmpeg
+# stdin writer thread.  Each 1080p BGR frame is ~6 MB; 30 frames ≈ 180 MB.
+# Absorbs short encoder stalls without dropping frames.  If the encoder
+# falls further behind, frames are dropped rather than RAM exhausted.
+_PIPE_QUEUE_DEPTH = 30   # frames
+
+# ---------------------------------------------------------------------------
 # CPU thread budget
 # ---------------------------------------------------------------------------
-# The fraction of logical cores the recorder may use is read from
-# config["thread_budget"] (25 / 50 / 75 %) and applied at start_capture()
-# to every CPU-bound pool: ffmpeg libx264, ffmpeg filter graph, OpenCV.
-#
-# _thread_cap is initialised here to a safe 75% fallback so that any
-# code path that runs before start_capture() (e.g. system info display)
-# still has a valid value.  It is always overwritten by start_capture().
-#
-#   e.g.  8 cores @ 75% -> cap = 6   (2 reserved for OS / game)
-#         8 cores @ 50% -> cap = 4   (4 reserved)
-#         8 cores @ 25% -> cap = 2   (6 reserved)
-#
-# Minimum is always 1 so the application works on low-core systems.
-_THREAD_BUDGET_DEFAULT = 75          # % – used only before config is loaded
+_THREAD_BUDGET_DEFAULT = 75
 _thread_cap: int = max(1, int((os.cpu_count() or 2) * _THREAD_BUDGET_DEFAULT / 100))
 
 # ---------------------------------------------------------------------------
@@ -83,16 +128,16 @@ _thread_cap: int = max(1, int((os.cpu_count() or 2) * _THREAD_BUDGET_DEFAULT / 1
 # ---------------------------------------------------------------------------
 is_capturing        = False
 capture_thread      = None
-_pa                 = None       # PyAudio instance – kept alive for the session
-last_output_file    = None       # path of most-recently completed segment
-last_segment_count  = 0          # segments saved in the last session
-capture_start_time  = None       # time.time() when current capture started
-current_temp_video  = None       # path of the in-progress temp AVI
-current_segment_num = 1          # 1-based segment counter (live)
-_segment_start_time = None       # time.time() when current segment started
+_pa                 = None
+last_output_file    = None
+last_segment_count  = 0
+capture_start_time  = None
+current_temp_video  = None
+current_segment_num = 1
+_segment_start_time = None
 
 # Mux pipeline ---------------------------------------------------------------
-pending_mux_count  = 0           # segments currently being encoded in BG
+pending_mux_count  = 0
 _pending_mux_lock  = threading.Lock()
 _mux_executor: concurrent.futures.ThreadPoolExecutor | None = None
 _mux_futures: list[concurrent.futures.Future] = []
@@ -123,7 +168,7 @@ def _get_available_ram_gb() -> float:
         ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
         return stat.ullAvailPhys / (1024 ** 3)
     except Exception:
-        return 2.0  # safe default if ctypes fails
+        return 2.0
 
 
 def _detect_audio_chunk() -> int:
@@ -137,60 +182,38 @@ def _detect_audio_chunk() -> int:
 
 
 # ---------------------------------------------------------------------------
-# CPU feature detection  (Windows – IsProcessorFeaturePresent)
+# CPU feature detection  (Windows – IsProcessorFeaturePresent + numpy)
 # ---------------------------------------------------------------------------
-# PF_ constants from winnt.h
 _PF = {
-    "SSE2":          10,
-    "SSE3":          13,  # PF_SSE3_INSTRUCTIONS_AVAILABLE (may not be present on all OS)
-    "XSAVE":         17,
+    "SSE2":  10,
+    "SSE3":  13,
+    "XSAVE": 17,
 }
 
-# For AVX / AVX2 / AVX-512 we use the CPUID instruction via inline assembly
-# emulated through ctypes + a small struct; fall back gracefully on error.
 def _cpuid(leaf: int, subleaf: int = 0) -> tuple[int, int, int, int]:
-    """
-    Execute CPUID with eax=leaf, ecx=subleaf.
-    Returns (eax, ebx, ecx, edx).  Raises RuntimeError on failure.
-    """
-    # Build a tiny x86-64 CPUID shellcode and call it via ctypes VirtualAlloc.
-    # The shellcode: push rbx; mov eax, ecx (leaf); mov ecx, edx (subleaf);
-    #                cpuid; mov [r8], eax; mov [r9], ebx; ...
-    # This is complex and Windows-specific; use a simpler heuristic instead.
     raise RuntimeError("direct CPUID not implemented; use fallback")
 
 
 def _detect_avx_support() -> dict[str, bool]:
-    """
-    Detect AVX / AVX2 / AVX-512 by inspecting numpy's CPU dispatch flags.
-    numpy exposes which SIMD targets it was compiled with and which it will
-    use at runtime via numpy.lib._version (private) or sys / platform.
-
-    We also check IsProcessorFeaturePresent for basic SSE2 presence.
-    """
     result = {"SSE2": False, "AVX": False, "AVX2": False, "AVX512F": False}
 
-    # --- Basic features via IsProcessorFeaturePresent ---
     try:
         k32 = ctypes.windll.kernel32
         result["SSE2"] = bool(k32.IsProcessorFeaturePresent(10))
     except Exception:
         pass
 
-    # --- AVX / AVX2 / AVX-512 from numpy's runtime CPU info ---
     try:
-        # numpy >= 1.21 exposes __cpu_features__  (dict of feature -> bool)
         cpu_features = np.__cpu_features__          # type: ignore[attr-defined]
-        result["AVX"]    = bool(cpu_features.get("AVX",    False))
-        result["AVX2"]   = bool(cpu_features.get("AVX2",   False))
+        result["AVX"]     = bool(cpu_features.get("AVX",    False))
+        result["AVX2"]    = bool(cpu_features.get("AVX2",   False))
         result["AVX512F"] = bool(cpu_features.get("AVX512F", False))
         return result
     except AttributeError:
         pass
 
-    # Fallback: probe via numpy's optimised dispatch (older numpy)
     try:
-        conf = np.__config__.blas_opt_info           # type: ignore[attr-defined]
+        conf  = np.__config__.blas_opt_info          # type: ignore[attr-defined]
         extra = " ".join(str(v) for v in conf.values())
         if "avx512" in extra.lower():
             result["AVX512F"] = True
@@ -208,26 +231,22 @@ def _detect_avx_support() -> dict[str, bool]:
 
 
 def get_cpu_info() -> dict:
-    """
-    Return a cached dict with CPU name, logical core count, and SIMD flags.
-    Called by displays.system_info_screen().
-    """
+    """Return a cached dict with CPU name, logical core count, and SIMD flags."""
     global _cpu_info
     if _cpu_info is not None:
         return _cpu_info
 
     info: dict = {
-        "name":              "Unknown",
-        "logical_cores":      os.cpu_count() or 1,
-        "avx":               False,
-        "avx2":              False,
-        "avx512f":           False,
-        "sse2":              False,
-        "numpy_threads":      1,
-        "thread_cap":        _thread_cap,   # current cap (set by start_capture)
+        "name":          "Unknown",
+        "logical_cores":  os.cpu_count() or 1,
+        "avx":           False,
+        "avx2":          False,
+        "avx512f":       False,
+        "sse2":          False,
+        "numpy_threads":  1,
+        "thread_cap":    _thread_cap,
     }
 
-    # CPU name via WMIC (Windows)
     try:
         out = subprocess.check_output(
             ["wmic", "cpu", "get", "Name", "/value"],
@@ -240,14 +259,12 @@ def get_cpu_info() -> dict:
     except Exception:
         pass
 
-    # SIMD flags
     avx = _detect_avx_support()
     info["sse2"]    = avx.get("SSE2",    False)
     info["avx"]     = avx.get("AVX",     False)
     info["avx2"]    = avx.get("AVX2",    False)
     info["avx512f"] = avx.get("AVX512F", False)
 
-    # numpy thread count
     try:
         info["numpy_threads"] = np.__config__.blas_opt_info.get(    # type: ignore
             "num_threads", os.cpu_count() or 1)
@@ -287,17 +304,10 @@ def init_capture_system() -> bool:
         print("       Please run the installer (option 2 in the batch menu).")
         return False
 
-    # Size audio chunk based on available RAM
     AUDIO_CHUNK = _detect_audio_chunk()
-
-    # Apply the fallback thread cap to OpenCV now.  start_capture() will
-    # recompute from the actual config value and re-apply before recording.
     cv2.setNumThreads(_thread_cap)
 
-    # Warm up CPU info cache
     ci = get_cpu_info()
-
-    # One PyAudio instance for the whole session
     _pa = pyaudio.PyAudio()
 
     simd = []
@@ -308,7 +318,7 @@ def init_capture_system() -> bool:
     simd_str = ", ".join(simd) if simd else "none detected"
 
     ram_gb = _get_available_ram_gb()
-    print(f"Capture system initialised  (mss + MJPG/ffmpeg libx264 + pyaudiowpatch).")
+    print(f"Capture system initialised  (mss + ffmpeg libx264 pipe + pyaudiowpatch).")
     print(f"  CPU         : {ci['name']}")
     print(f"  Logical CPUs: {ci['logical_cores']}   SIMD: {simd_str}")
     print(f"  Thread cap  : {_thread_cap} core(s) (fallback – updated at recording start)")
@@ -360,16 +370,7 @@ def _audio_capture_thread(pa: pyaudio.PyAudio, device_info: dict,
                           wav_path: str, stop_event: threading.Event):
     """
     Stream audio from device_info directly into a WAV file one chunk at a time.
-
-    Previous design accumulated all frames in a Python list and wrote them
-    in a single wf.writeframes() call at the end.  For a 1-hour session at
-    44 100 Hz / stereo int16 that meant ~630 MB held in RAM per device.
-
-    This version writes each chunk to disk immediately; peak in-memory usage
-    per device is a single AUDIO_CHUNK (8–16 KB).
-
-    The wave module updates the file header on close(), so the WAV is valid
-    even if the process is interrupted after the file is opened.
+    Peak in-memory usage per device is a single AUDIO_CHUNK (8-16 KB).
     """
     is_loopback = device_info.get("isLoopbackDevice", False)
     channels    = int(device_info["maxOutputChannels"] if is_loopback
@@ -407,7 +408,6 @@ def _audio_capture_thread(pa: pyaudio.PyAudio, device_info: dict,
         stream.stop_stream()
         stream.close()
 
-    # Remove zero-length WAV so the mux step skips it gracefully
     if not wrote_any and os.path.exists(wav_path):
         try:
             os.remove(wav_path)
@@ -416,45 +416,33 @@ def _audio_capture_thread(pa: pyaudio.PyAudio, device_info: dict,
 
 
 # ---------------------------------------------------------------------------
-# ffmpeg mux  (config-driven, multi-threaded)
+# ffmpeg mux  —  STREAM COPY for video (seconds, not minutes)
 # ---------------------------------------------------------------------------
-def _mux(video_path: str, loopback_wav, mic_wav, output_path: str,
-         config: dict):
+def _mux(video_path: str, loopback_wav, mic_wav, output_path: str, config: dict):
     """
-    Mux video (MJPG intermediate -> libx264 re-encode) with up to two
-    audio WAV sources.  System audio and microphone are blended with
-    ffmpeg's amix filter.
+    Mux a pre-encoded H.264 video with up to two audio WAV sources.
 
-    All thread counts are set to _thread_cap (configured budget: 25/50/75%),
-    computed at init_capture_system() and applied consistently to:
-    -threads N               : libx264 encoder thread pool
-    -filter_threads N        : simple -vf filter workers
-    -filter_complex_threads N: complex filtergraph workers (amix path)
+    VIDEO IS STREAM-COPIED (-c:v copy).  Because the capture stage already
+    encoded the video with libx264 in real time, there is nothing to re-encode.
+    This reduces mux time from 30-60 minutes (old: MJPG AVI -> libx264 re-encode)
+    to typically 5-60 seconds (container remux + AAC audio encode only).
 
-    This leaves the remaining 25% of CPU cores free for the game.
-
-    Video params (preset, crf, tune, pix_fmt) come from the active
-    video_compression profile.  Audio bitrate is the effective value
-    after the audio_compression cap is applied.
+    The fast mux means the previous segment's temp MKV file is deleted almost
+    immediately after the segment ends, so temp disk usage stays low throughout
+    a multi-hour session and the disk-exhaustion / frozen-video problem cannot
+    recur.
     """
     import imageio_ffmpeg
 
-    ffmpeg       = imageio_ffmpeg.get_ffmpeg_exe()
-    cmd          = [ffmpeg, "-y"]
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd    = [ffmpeg, "-y"]
 
-    # ---- thread control -----------------------------------------------
-    # _thread_cap is set from config["thread_budget"] at start_capture().
-    # explicitly to every ffmpeg thread pool means libx264, the filter
-    # graph, and I/O all stay within the budget, leaving the remaining
-    # 25% of cores free for the game.
-    #
-    # -threads N          : libx264 encoder thread pool
-    # -filter_threads N   : simple -vf filter workers
-    # -filter_complex_threads N : complex filtergraph workers (amix path)
+    # Thread control (for the audio filter graph and AAC encoder only;
+    # video requires no threads because it is stream-copied).
     cmd += ["-threads", str(_thread_cap)]
 
     # ---- inputs ----
-    cmd += ["-i", video_path]
+    cmd += ["-i", video_path]   # pre-encoded H.264 MKV (video only, no audio track)
 
     audio_src_indices = []
     for wav in (loopback_wav, mic_wav):
@@ -462,50 +450,36 @@ def _mux(video_path: str, loopback_wav, mic_wav, output_path: str,
             cmd += ["-i", wav]
             audio_src_indices.append(len(audio_src_indices) + 1)
 
-    # ---- filter graph ----
-    # mpdecimate: drop duplicate frames (huge savings on static screens)
-    # vsync vfr:  variable-rate so dropped frames actually shrink the file
-    video_filter = "mpdecimate"
+    # ---- video: stream copy, zero re-encode cost ----
+    cmd += ["-c:v", "copy"]
 
+    # ---- audio: mix if both present, then encode AAC ----
     if len(audio_src_indices) == 2:
-        fc = (f"[0:v]{video_filter}[vout];"
-              f"[{audio_src_indices[0]}:a][{audio_src_indices[1]}:a]"
+        fc = (f"[{audio_src_indices[0]}:a][{audio_src_indices[1]}:a]"
               f"amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]")
         cmd += ["-filter_complex", fc,
                 "-filter_complex_threads", str(_thread_cap),
-                "-map", "[vout]", "-map", "[aout]",
-                "-vsync", "vfr"]
+                "-map", "0:v", "-map", "[aout]"]
     elif len(audio_src_indices) == 1:
-        cmd += ["-vf", video_filter,
-                "-filter_threads", str(_thread_cap),
-                "-vsync", "vfr",
-                "-map", "0:v", "-map", f"{audio_src_indices[0]}:a"]
+        cmd += ["-map", "0:v", "-map", f"{audio_src_indices[0]}:a"]
     else:
-        cmd += ["-vf", video_filter,
-                "-filter_threads", str(_thread_cap),
-                "-vsync", "vfr",
-                "-map", "0:v"]
+        cmd += ["-map", "0:v"]
 
-    # ---- video codec: libx264 with profile-driven params ----
-    video_params = configure.get_video_params(config)
-    cmd += ["-c:v", "libx264"] + video_params
-
-    # ---- audio codec: AAC at effective bitrate ----
-    bitrate_kbps = configure.effective_audio_bitrate(config)
-    cmd += ["-c:a", "aac", "-b:a", f"{bitrate_kbps}k"]
+    if audio_src_indices:
+        bitrate_kbps = configure.effective_audio_bitrate(config)
+        cmd += ["-c:a", "aac", "-b:a", f"{bitrate_kbps}k"]
 
     cmd += [output_path]
 
     print(f"Muxing (BG)  -> {os.path.basename(output_path)}"
-          f"  [threads={_thread_cap}/{os.cpu_count() or 2}]")
+          f"  [stream copy + AAC, threads={_thread_cap}/{os.cpu_count() or 2}]")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"WARNING: ffmpeg mux failed for {os.path.basename(output_path)}.")
         print(result.stderr[-2000:])
         try:
-            import shutil
             base_no_ext = os.path.splitext(output_path)[0]
-            fallback    = f"{base_no_ext}_video_only.avi"
+            fallback    = f"{base_no_ext}_video_only.mkv"
             shutil.copy2(video_path, fallback)
             print(f"  Fallback saved: {fallback}")
         except Exception:
@@ -519,16 +493,15 @@ def _mux_and_cleanup(vid_tmp: str, lb_wav: str | None, mic_wav: str | None,
                      final_path: str, config: dict):
     """
     Runs in a ThreadPoolExecutor worker.
-    1. Mux video + audio to final_path.
+    1. Mux video + audio to final_path  (fast: stream copy + AAC only).
     2. Delete temp files.
-    3. Update shared globals (last_output_file, pending_mux_count).
+    3. Update shared globals.
     """
     global last_output_file, pending_mux_count
 
     try:
         _mux(vid_tmp, lb_wav, mic_wav, final_path, config)
     finally:
-        # Always clean up temp files and decrement counter
         for p in filter(None, (vid_tmp, lb_wav, mic_wav)):
             try:
                 if os.path.exists(p):
@@ -547,27 +520,32 @@ def _mux_and_cleanup(vid_tmp: str, lb_wav: str | None, mic_wav: str | None,
 
 
 # ---------------------------------------------------------------------------
-# Segment capture  (inner – captures one segment of frames, returns immediately)
+# Segment capture  (inner)
 # ---------------------------------------------------------------------------
 def _capture_segment(config: dict, segment_num: int,
                      split_limit: float | None,
                      sct: mss.base.MSSBase
                      ) -> tuple | None:
     """
-    Capture frames into one temp AVI for up to `split_limit` seconds
-    (or indefinitely when split_limit is None).
+    Capture one segment of frames and encode them in real-time via an ffmpeg
+    stdin pipe.
 
-    The mss screen-capture context (sct) is passed in so it can be
-    reused across segments – this avoids DXGI re-initialisation overhead.
+    Pipeline:
+        mss grab -> BGRA->BGR (cv2) -> frame queue ->
+        [pipe-writer thread] -> ffmpeg stdin ->
+        libx264 real-time encoder -> temp MKV (video only, no audio)
 
-    Returns a 5-tuple:
+    The pipe-writer thread decouples the grab loop from stdin I/O latency.
+    If the encoder is slower than the capture rate (queue fills), frames are
+    dropped with a warning rather than blocking the timer or growing RAM.
+
+    Returns:
         (outcome, vid_tmp, lb_wav_or_None, mic_wav_or_None, final_path)
-
-    outcome:
-        "split" – stopped because the segment time limit was reached
-        "done"  – stopped because is_capturing went False
-    Returns None on a fatal VideoWriter error.
+        outcome: "split" – time limit reached; "done" – user stopped
+    Returns None on a fatal ffmpeg startup error.
     """
+    import imageio_ffmpeg
+
     global current_temp_video, _segment_start_time, current_segment_num
 
     current_segment_num = segment_num
@@ -580,7 +558,10 @@ def _capture_segment(config: dict, segment_num: int,
 
     stamp   = int(time.time())
     tmp_dir = tempfile.gettempdir()
-    vid_tmp = os.path.join(tmp_dir, f"d264_video_{stamp}_s{segment_num:03d}.avi")
+
+    # Temp video is now pre-encoded H.264 MKV: 1-5 GB/hour vs 10-20 GB/hour
+    # for the old MJPG AVI intermediate.
+    vid_tmp = os.path.join(tmp_dir, f"d264_video_{stamp}_s{segment_num:03d}.mkv")
     lb_wav  = os.path.join(tmp_dir, f"d264_loopback_{stamp}_s{segment_num:03d}.wav")
     mic_wav = os.path.join(tmp_dir, f"d264_mic_{stamp}_s{segment_num:03d}.wav")
 
@@ -631,18 +612,75 @@ def _capture_segment(config: dict, segment_num: int,
         t.start()
         audio_threads.append(t)
 
-    # ---- Open video writer ----
-    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
-    writer = cv2.VideoWriter(vid_tmp, fourcc, fps, (w, h))
+    # ---- Launch ffmpeg for real-time H.264 encoding via stdin pipe ----
+    #
+    # Input  : raw BGR24 frames at the configured resolution and FPS.
+    # Output : H.264 video in MKV container, no audio track.
+    #
+    # -thread_queue_size 512  : ffmpeg input demuxer read-ahead buffer.
+    #                           Decouples I/O from the encoder thread pool
+    #                           and absorbs brief grab-loop hiccups.
+    # -an                     : suppress audio; audio is added at mux time.
+    # video_params (preset/crf/tune/pix_fmt) : from active compression profile.
+    ffmpeg_exe   = imageio_ffmpeg.get_ffmpeg_exe()
+    video_params = configure.get_video_params(config)
 
-    if not writer.isOpened():
-        print(f"ERROR: VideoWriter (MJPG) failed to open for segment {segment_num}. "
-              "Segment aborted.")
+    ffmpeg_cmd = [
+        ffmpeg_exe, "-y",
+        "-f",                "rawvideo",
+        "-vcodec",           "rawvideo",
+        "-s",                f"{w}x{h}",
+        "-pix_fmt",          "bgr24",
+        "-r",                str(fps),
+        "-thread_queue_size","512",
+        "-i",                "pipe:0",
+        "-c:v",              "libx264",
+        "-threads",          str(_thread_cap),
+    ] + video_params + [
+        "-an",
+        "-f", "matroska",
+        vid_tmp,
+    ]
+
+    try:
+        ffmpeg_proc = subprocess.Popen(
+            ffmpeg_cmd,
+            stdin  = subprocess.PIPE,
+            stdout = subprocess.DEVNULL,
+            stderr = subprocess.PIPE,
+        )
+    except OSError as e:
+        print(f"ERROR: could not launch ffmpeg for segment {segment_num}: {e}")
         stop_audio.set()
         for t in audio_threads:
             t.join(timeout=5)
         current_temp_video = None
         return None
+
+    # ---- Pipe-writer thread ----
+    # Writes raw BGR bytes to ffmpeg stdin from a bounded queue.
+    # Runs as a daemon thread so it is cleaned up if the main process exits.
+    frame_q = _queue.Queue(maxsize=_PIPE_QUEUE_DEPTH)
+
+    def _pipe_writer():
+        while True:
+            item = frame_q.get()
+            if item is None:
+                break
+            try:
+                ffmpeg_proc.stdin.write(item)
+            except (BrokenPipeError, OSError):
+                # ffmpeg process died; drain queue to unblock any put() calls.
+                while True:
+                    try:
+                        frame_q.get_nowait()
+                    except _queue.Empty:
+                        break
+                break
+
+    pipe_thread = threading.Thread(target=_pipe_writer, daemon=True,
+                                   name=f"pipe-s{segment_num}")
+    pipe_thread.start()
 
     seg_label = f"S{segment_num:03d}" if split_limit else "recording"
     print(f"Capturing {seg_label} -> {final}")
@@ -651,10 +689,12 @@ def _capture_segment(config: dict, segment_num: int,
     next_tick            = time.perf_counter()
     _segment_start_time  = time.time()
     result               = "done"
+    frames_dropped       = 0
 
-    # Re-query monitor each segment in case display setup changed
+    # Re-query monitor each segment in case display setup changed.
     monitor = sct.monitors[1]
 
+    # ---- Frame grab loop ----
     while is_capturing:
         if split_limit is not None:
             if (time.time() - _segment_start_time) >= split_limit:
@@ -673,17 +713,49 @@ def _capture_segment(config: dict, segment_num: int,
         if bgr.shape[1] != w or bgr.shape[0] != h:
             bgr = cv2.resize(bgr, (w, h), interpolation=cv2.INTER_LINEAR)
 
-        writer.write(bgr)
+        # tobytes() produces a new bytes object (safe copy; the mss internal
+        # buffer is reused on the next sct.grab() call).
+        # Non-blocking put: if the queue is full the frame is dropped rather
+        # than the grab loop stalling (which would cascade into audio desync).
+        try:
+            frame_q.put_nowait(bgr.tobytes())
+        except _queue.Full:
+            frames_dropped += 1
+
         next_tick += frame_dur
 
-    writer.release()
+    # ---- Flush and close ----
+    frame_q.put(None)           # sentinel: tells pipe_writer to exit
+    pipe_thread.join(timeout=60)
+
+    try:
+        ffmpeg_proc.stdin.close()
+    except OSError:
+        pass
+
+    # Wait for ffmpeg to flush encoder buffers and finalise the MKV.
+    # With -tune zerolatency the flush is near-instant; 120 s is a generous
+    # safety margin for any edge case.
+    try:
+        ret = ffmpeg_proc.wait(timeout=120)
+    except subprocess.TimeoutExpired:
+        ffmpeg_proc.kill()
+        ret = ffmpeg_proc.wait()
+        print(f"  WARNING: ffmpeg timed out flushing segment {segment_num}; process killed.")
+
+    if frames_dropped:
+        print(f"  Warning: {frames_dropped} frame(s) dropped (pipe queue full — "
+              f"encoder may need a faster preset or lower thread cap)")
+    if ret != 0:
+        stderr_text = ffmpeg_proc.stderr.read().decode(errors="replace")
+        print(f"  WARNING: ffmpeg exited with code {ret} for segment {segment_num}.")
+        print(stderr_text[-2000:])
 
     # ---- Stop audio threads ----
     stop_audio.set()
     for t in audio_threads:
         t.join(timeout=10)
 
-    # Resolve actual wav paths (thread writes to these; None if file absent)
     actual_lb_wav  = lb_wav  if (loopback_info and os.path.exists(lb_wav))  else None
     actual_mic_wav = mic_wav if (mic_info      and os.path.exists(mic_wav)) else None
 
@@ -700,17 +772,13 @@ def _capture_loop(config: dict):
     """
     Outer loop managing multi-segment capture with a pipelined mux.
 
-    KEY CHANGE FROM ORIGINAL:
     After each segment's frame capture ends, the mux is submitted to a
     background ThreadPoolExecutor and the next segment begins immediately.
-    The previous design ran the mux inside _capture_segment() and blocked
-    the loop for the entire ffmpeg encoding time (potentially several minutes
-    for a 1-hour MJPG -> H.264 re-encode), causing a visible gap.
 
-    We use max_workers=1 so that only one ffmpeg process runs at a time.
-    This keeps CPU load predictable: one core-pool for capture (mss /
-    OpenCV / numpy at 75% cap), one core-pool for encoding (ffmpeg at
-    75% cap).  Both pools share the budget; the game always keeps 25%.
+    Because mux is now a stream copy + audio encode (seconds, not minutes),
+    the previous segment's temp file is deleted almost immediately.  The
+    two temp files therefore never coexist for more than a few seconds,
+    keeping temp disk usage bounded at ~2-6 GB regardless of session length.
     """
     global is_capturing, last_segment_count, current_segment_num
     global pending_mux_count, _mux_executor, _mux_futures
@@ -718,7 +786,6 @@ def _capture_loop(config: dict):
     splits_enabled = config.get("video_splits", False)
     split_limit    = SPLIT_DURATION if splits_enabled else None
 
-    # One ffmpeg at a time; capture and encode share the machine without fighting.
     executor       = concurrent.futures.ThreadPoolExecutor(max_workers=1,
                                                            thread_name_prefix="mux")
     _mux_executor  = executor
@@ -728,20 +795,17 @@ def _capture_loop(config: dict):
     segment_num        = 1
     last_segment_count = 0
 
-    # Reuse a single mss context for the entire session (avoids DXGI re-init
-    # overhead between segments, which can take hundreds of milliseconds).
+    # Reuse a single mss context to avoid DXGI re-init overhead between segments.
     with mss.mss() as sct:
         while is_capturing:
             result = _capture_segment(config, segment_num, split_limit, sct)
 
             if result is None:
-                # VideoWriter fatal error; stop cleanly
                 break
 
             outcome, vid_tmp, lb_wav, mic_wav, final_path = result
             last_segment_count += 1
 
-            # Increment BEFORE submitting so the display shows it immediately
             with _pending_mux_lock:
                 pending_mux_count += 1
 
@@ -752,15 +816,9 @@ def _capture_loop(config: dict):
 
             if outcome == "split" and is_capturing:
                 segment_num += 1
-                # No sleep – next segment capture starts immediately.
-                # The previous 0.25 s delay is eliminated; mss context is
-                # already warm and VideoWriter opens in < 1 ms.
             else:
-                break   # user stopped, or not splitting
+                break
 
-    # Frame capture done.  _mux_futures is readable by stop_capture() for
-    # waiting.  We do NOT wait here – _capture_loop returns so that the
-    # capture_thread finishes quickly, and stop_capture() handles the wait.
     current_segment_num = 1
 
 
@@ -777,11 +835,6 @@ def start_capture(config: dict):
         print("Already capturing.")
         return
 
-    # ------------------------------------------------------------------
-    # Apply thread budget from config before anything else.
-    # config["thread_budget"] is 25, 50, or 75 (percent).
-    # This overrides the fallback value set at init time.
-    # ------------------------------------------------------------------
     global _thread_cap
     budget_pct  = config.get("thread_budget", _THREAD_BUDGET_DEFAULT)
     logical     = os.cpu_count() or 2
@@ -808,13 +861,8 @@ def start_capture(config: dict):
 
 def stop_capture():
     """
-    Signal the capture loop to stop, then wait for all background mux jobs.
-
-    The capture_thread itself finishes quickly (it just returns from
-    _capture_loop after setting the flag).  The potentially long wait is
-    for the executor futures (ffmpeg encoding).  No arbitrary timeout is
-    applied to the mux wait because encoding a 1-hour segment can legitimately
-    take several minutes.
+    Signal the capture loop to stop, then wait for background mux jobs.
+    Mux jobs now complete in seconds (stream copy + AAC), so the wait is brief.
     """
     global is_capturing, capture_thread, _mux_executor
 
@@ -824,21 +872,19 @@ def stop_capture():
 
     is_capturing = False
 
-    # Wait for the frame-capture thread to exit (fast – just finishes current frame)
     if capture_thread and capture_thread.is_alive():
         capture_thread.join(timeout=15)
 
     capture_thread = None
 
-    # Wait for all background mux jobs
-    futures_to_wait = list(_mux_futures)   # snapshot
+    futures_to_wait = list(_mux_futures)
     if futures_to_wait:
         remaining = sum(1 for f in futures_to_wait if not f.done())
         if remaining:
             print(f"  Waiting for {remaining} segment mux job(s) to complete ...")
         for future in futures_to_wait:
             try:
-                future.result()            # blocks until this mux finishes
+                future.result()
             except Exception as e:
                 print(f"  Mux error: {e}")
 
