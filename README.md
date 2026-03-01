@@ -37,7 +37,7 @@ x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~
 Selection; Menu Options = 1-4, Quit = Q:
 
 ```
-- The display while recording...(v0.2)
+- The display while recording non-secmented...(v0.2)
 ```
 ===============================================================================
    Desktop-264-Capture : Recording
