@@ -176,6 +176,7 @@ def write_default_config():
         "audio_compression": "Optimal Performance",
         "audio_bitrate": 192,
         "container_format": "MKV",
+        "thread_budget": 75,
     }
     with open(CFG_PATH, "w") as f:
         json.dump(cfg, f, indent=4)
