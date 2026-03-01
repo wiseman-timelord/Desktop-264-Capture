@@ -399,9 +399,13 @@ def configure_settings_screen(config):
         splits_val = "True" if config.get("video_splits", False) else "False"
         print(f"   8) 1Hr Video Splits   : {splits_val}"
               f"   (Save in 1Hr Segments)")
-        blank(4)
+        blank()
+        tb_pct = config.get("thread_budget", 75)
+        print(f"   9) Max Threads Used   : {tb_pct}%"
+              f"   (cycles: 25% / 50% / 75%)")
+        blank(3)
         footer()
-        choice = input("   Selection; Options = 1-8, Back = B: ").strip()
+        choice = input("   Selection; Options = 1-9, Back = B: ").strip()
 
         # ---- 1) Resolution (cycle) ----
         if choice == "1":
@@ -457,6 +461,15 @@ def configure_settings_screen(config):
         # ---- 8) 1Hr video splits (toggle) ----
         elif choice == "8":
             config["video_splits"] = not config.get("video_splits", False)
+            configure.save_configuration(config)
+
+        # ---- 9) Thread budget (cycle 25 / 50 / 75) ----
+        elif choice == "9":
+            opts = configure.thread_budget_options   # [25, 50, 75]
+            cur  = config.get("thread_budget", 75)
+            idx  = opts.index(cur) if cur in opts else 2   # default to 75%
+            idx  = (idx + 1) % len(opts)
+            config["thread_budget"] = opts[idx]
             configure.save_configuration(config)
 
         elif choice.upper() == "B":
@@ -602,10 +615,9 @@ def system_info_screen():
         simd_str = ", ".join(simd_parts) if simd_parts else "none detected"
         print(f"   Cores    : {cores_str}   SIMD: {simd_str}")
         cap      = ci.get("thread_cap", recorder._thread_cap)
-        pct      = ci.get("thread_budget_pct", 75)
         reserved = ci["logical_cores"] - cap
-        print(f"   Threads  : {cap} used ({pct}% budget)  "
-              f"{reserved} core(s) reserved for OS / game")
+        print(f"   Threads  : {cap} active core(s)  "
+              f"{reserved} reserved for OS / game")
     except Exception:
         print("   CPU      : detection unavailable")
     blank(1)

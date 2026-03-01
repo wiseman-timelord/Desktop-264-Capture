@@ -16,7 +16,7 @@
 #
 # --- CPU THREADING ---
 # All CPU-bound thread pools (ffmpeg libx264, ffmpeg filter graph, OpenCV)
-# are capped to 75% of logical cores (MUX_THREAD_FRACTION) so the remaining
+# are capped to the configured thread budget (25/50/75% of logical cores) so the remaining
 # 25% stays available for the game being recorded.
 # numpy / OpenCV / mss already auto-enable SIMD (SSE2, AVX, AVX2) via
 # their pre-built wheels; no extra wiring is needed there.
@@ -62,21 +62,21 @@ SPLIT_DURATION = 3600.0  # seconds per segment (1 hour)
 # ---------------------------------------------------------------------------
 # CPU thread budget
 # ---------------------------------------------------------------------------
-# Gameplay must remain fluid.  The recording application caps all CPU-bound
-# thread pools (ffmpeg libx264, ffmpeg filter graph, OpenCV) to this fraction
-# of the logical core count.  Computed once at init; stored as an integer.
+# The fraction of logical cores the recorder may use is read from
+# config["thread_budget"] (25 / 50 / 75 %) and applied at start_capture()
+# to every CPU-bound pool: ffmpeg libx264, ffmpeg filter graph, OpenCV.
 #
-#   e.g.  8 cores  -> floor(8 * 0.75) = 6 threads used  (2 left for the game)
-#         4 cores  -> floor(4 * 0.75) = 3 threads used  (1 left for the game)
-#         2 cores  -> max(1, floor(2 * 0.75)) = 1 thread used
+# _thread_cap is initialised here to a safe 75% fallback so that any
+# code path that runs before start_capture() (e.g. system info display)
+# still has a valid value.  It is always overwritten by start_capture().
 #
-# The minimum is always 1 so the application can still function on
-# low-core systems.  The fraction is applied to every CPU-bound pool so the
-# game always has at least the remaining 25% of cores available.
-MUX_THREAD_FRACTION = 0.75
-
-# Populated by init_capture_system(); read by _mux() and OpenCV init.
-_thread_cap: int = 1
+#   e.g.  8 cores @ 75% -> cap = 6   (2 reserved for OS / game)
+#         8 cores @ 50% -> cap = 4   (4 reserved)
+#         8 cores @ 25% -> cap = 2   (6 reserved)
+#
+# Minimum is always 1 so the application works on low-core systems.
+_THREAD_BUDGET_DEFAULT = 75          # % – used only before config is loaded
+_thread_cap: int = max(1, int((os.cpu_count() or 2) * _THREAD_BUDGET_DEFAULT / 100))
 
 # ---------------------------------------------------------------------------
 # Module-level state
@@ -217,15 +217,14 @@ def get_cpu_info() -> dict:
         return _cpu_info
 
     info: dict = {
-        "name":          "Unknown",
-        "logical_cores":  os.cpu_count() or 1,
-        "avx":           False,
-        "avx2":          False,
-        "avx512f":       False,
-        "sse2":          False,
-        "numpy_threads":  1,
-        "thread_cap":    _thread_cap,           # 75% budget, set at init
-        "thread_budget_pct": int(MUX_THREAD_FRACTION * 100),
+        "name":              "Unknown",
+        "logical_cores":      os.cpu_count() or 1,
+        "avx":               False,
+        "avx2":              False,
+        "avx512f":           False,
+        "sse2":              False,
+        "numpy_threads":      1,
+        "thread_cap":        _thread_cap,   # current cap (set by start_capture)
     }
 
     # CPU name via WMIC (Windows)
@@ -291,18 +290,8 @@ def init_capture_system() -> bool:
     # Size audio chunk based on available RAM
     AUDIO_CHUNK = _detect_audio_chunk()
 
-    # -----------------------------------------------------------------
-    # CPU thread cap  (75% of logical cores, minimum 1)
-    # Applied to every CPU-bound pool in this process so the remaining
-    # 25% stays available for the game being recorded.
-    # -----------------------------------------------------------------
-    global _thread_cap
-    logical_cores = os.cpu_count() or 2
-    _thread_cap   = max(1, int(logical_cores * MUX_THREAD_FRACTION))
-
-    # Apply cap to OpenCV's internal thread pool immediately.
-    # This covers cv2.cvtColor(), cv2.resize(), and VideoWriter (MJPG
-    # encoder) which all share the same OpenCV thread pool.
+    # Apply the fallback thread cap to OpenCV now.  start_capture() will
+    # recompute from the actual config value and re-apply before recording.
     cv2.setNumThreads(_thread_cap)
 
     # Warm up CPU info cache
@@ -322,9 +311,7 @@ def init_capture_system() -> bool:
     print(f"Capture system initialised  (mss + MJPG/ffmpeg libx264 + pyaudiowpatch).")
     print(f"  CPU         : {ci['name']}")
     print(f"  Logical CPUs: {ci['logical_cores']}   SIMD: {simd_str}")
-    print(f"  Thread cap  : {_thread_cap} / {ci['logical_cores']} cores "
-          f"({int(MUX_THREAD_FRACTION * 100)}% budget – "
-          f"{ci['logical_cores'] - _thread_cap} core(s) reserved for OS/game)")
+    print(f"  Thread cap  : {_thread_cap} core(s) (fallback – updated at recording start)")
     print(f"  Free RAM    : {ram_gb:.1f} GB   Audio chunk: {AUDIO_CHUNK} frames")
     return True
 
@@ -438,7 +425,7 @@ def _mux(video_path: str, loopback_wav, mic_wav, output_path: str,
     audio WAV sources.  System audio and microphone are blended with
     ffmpeg's amix filter.
 
-    All thread counts are set to _thread_cap (75% of logical cores),
+    All thread counts are set to _thread_cap (configured budget: 25/50/75%),
     computed at init_capture_system() and applied consistently to:
     -threads N               : libx264 encoder thread pool
     -filter_threads N        : simple -vf filter workers
@@ -456,7 +443,7 @@ def _mux(video_path: str, loopback_wav, mic_wav, output_path: str,
     cmd          = [ffmpeg, "-y"]
 
     # ---- thread control -----------------------------------------------
-    # _thread_cap is 75% of logical cores (set at init).  Passing it
+    # _thread_cap is set from config["thread_budget"] at start_capture().
     # explicitly to every ffmpeg thread pool means libx264, the filter
     # graph, and I/O all stay within the budget, leaving the remaining
     # 25% of cores free for the game.
@@ -789,6 +776,20 @@ def start_capture(config: dict):
     if is_capturing:
         print("Already capturing.")
         return
+
+    # ------------------------------------------------------------------
+    # Apply thread budget from config before anything else.
+    # config["thread_budget"] is 25, 50, or 75 (percent).
+    # This overrides the fallback value set at init time.
+    # ------------------------------------------------------------------
+    global _thread_cap
+    budget_pct  = config.get("thread_budget", _THREAD_BUDGET_DEFAULT)
+    logical     = os.cpu_count() or 2
+    _thread_cap = max(1, int(logical * budget_pct / 100))
+    cv2.setNumThreads(_thread_cap)
+    reserved    = logical - _thread_cap
+    print(f"  Thread budget : {budget_pct}%  ->  {_thread_cap} / {logical} core(s) "
+          f"({reserved} reserved for OS / game)")
 
     last_output_file    = None
     current_temp_video  = None

@@ -102,6 +102,15 @@ audio_bitrate_options = [96, 128, 160, 192, 256]
 container_format_options = ["MKV", "MP4"]
 
 # ---------------------------------------------------------------------------
+# Thread budget options  (% of logical cores given to the recorder)
+# ---------------------------------------------------------------------------
+# Lower values leave more CPU headroom for the game being recorded.
+# The recorder applies this cap to: ffmpeg libx264, ffmpeg filter graph,
+# and the OpenCV thread pool.  25% is safest for demanding titles;
+# 75% is the recommended default for most systems.
+thread_budget_options = [25, 50, 75]   # percent
+
+# ---------------------------------------------------------------------------
 # Helper: resolve effective audio bitrate
 # ---------------------------------------------------------------------------
 def effective_audio_bitrate(config: dict) -> int:
@@ -144,6 +153,7 @@ DEFAULT_CONFIG = {
     "audio_bitrate":     192,
     "container_format":  "MKV",
     "video_splits":      False,
+    "thread_budget":     75,     # % of logical cores used by the recorder
 }
 
 
