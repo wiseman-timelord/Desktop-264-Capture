@@ -601,6 +601,11 @@ def system_info_screen():
         if ci.get("avx512f"): simd_parts.append("AVX-512F")
         simd_str = ", ".join(simd_parts) if simd_parts else "none detected"
         print(f"   Cores    : {cores_str}   SIMD: {simd_str}")
+        cap      = ci.get("thread_cap", recorder._thread_cap)
+        pct      = ci.get("thread_budget_pct", 75)
+        reserved = ci["logical_cores"] - cap
+        print(f"   Threads  : {cap} used ({pct}% budget)  "
+              f"{reserved} core(s) reserved for OS / game")
     except Exception:
         print("   CPU      : detection unavailable")
     blank(1)
@@ -624,7 +629,7 @@ def system_info_screen():
     except Exception:
         print("   ffmpeg   : not found")
     blank(1)
-    print("   Encoding : MJPG intermediate -> libx264 via ffmpeg (-threads 0)")
+    print("   Encoding : MJPG intermediate -> libx264 via ffmpeg (75% thread budget)")
     blank(1)
     print(f"   Output   : {DEFAULT_OUTPUT}")
     blank(1)

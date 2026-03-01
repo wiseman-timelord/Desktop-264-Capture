@@ -15,8 +15,9 @@
 # (~8-16 KB) rather than 600+ MB for a 1-hour session.
 #
 # --- CPU THREADING ---
-# ffmpeg is passed -threads 0 (auto-detect all logical cores) and
-# -filter_threads equal to CPU count for filter-graph parallelism.
+# All CPU-bound thread pools (ffmpeg libx264, ffmpeg filter graph, OpenCV)
+# are capped to 75% of logical cores (MUX_THREAD_FRACTION) so the remaining
+# 25% stays available for the game being recorded.
 # numpy / OpenCV / mss already auto-enable SIMD (SSE2, AVX, AVX2) via
 # their pre-built wheels; no extra wiring is needed there.
 #
@@ -57,6 +58,25 @@ AUDIO_CHUNK = 4096  # overridden by _detect_audio_chunk() at init
 # Segment duration
 # ---------------------------------------------------------------------------
 SPLIT_DURATION = 3600.0  # seconds per segment (1 hour)
+
+# ---------------------------------------------------------------------------
+# CPU thread budget
+# ---------------------------------------------------------------------------
+# Gameplay must remain fluid.  The recording application caps all CPU-bound
+# thread pools (ffmpeg libx264, ffmpeg filter graph, OpenCV) to this fraction
+# of the logical core count.  Computed once at init; stored as an integer.
+#
+#   e.g.  8 cores  -> floor(8 * 0.75) = 6 threads used  (2 left for the game)
+#         4 cores  -> floor(4 * 0.75) = 3 threads used  (1 left for the game)
+#         2 cores  -> max(1, floor(2 * 0.75)) = 1 thread used
+#
+# The minimum is always 1 so the application can still function on
+# low-core systems.  The fraction is applied to every CPU-bound pool so the
+# game always has at least the remaining 25% of cores available.
+MUX_THREAD_FRACTION = 0.75
+
+# Populated by init_capture_system(); read by _mux() and OpenCV init.
+_thread_cap: int = 1
 
 # ---------------------------------------------------------------------------
 # Module-level state
@@ -197,13 +217,15 @@ def get_cpu_info() -> dict:
         return _cpu_info
 
     info: dict = {
-        "name":         "Unknown",
-        "logical_cores": os.cpu_count() or 1,
-        "avx":          False,
-        "avx2":         False,
-        "avx512f":      False,
-        "sse2":         False,
-        "numpy_threads": 1,
+        "name":          "Unknown",
+        "logical_cores":  os.cpu_count() or 1,
+        "avx":           False,
+        "avx2":          False,
+        "avx512f":       False,
+        "sse2":          False,
+        "numpy_threads":  1,
+        "thread_cap":    _thread_cap,           # 75% budget, set at init
+        "thread_budget_pct": int(MUX_THREAD_FRACTION * 100),
     }
 
     # CPU name via WMIC (Windows)
@@ -269,6 +291,20 @@ def init_capture_system() -> bool:
     # Size audio chunk based on available RAM
     AUDIO_CHUNK = _detect_audio_chunk()
 
+    # -----------------------------------------------------------------
+    # CPU thread cap  (75% of logical cores, minimum 1)
+    # Applied to every CPU-bound pool in this process so the remaining
+    # 25% stays available for the game being recorded.
+    # -----------------------------------------------------------------
+    global _thread_cap
+    logical_cores = os.cpu_count() or 2
+    _thread_cap   = max(1, int(logical_cores * MUX_THREAD_FRACTION))
+
+    # Apply cap to OpenCV's internal thread pool immediately.
+    # This covers cv2.cvtColor(), cv2.resize(), and VideoWriter (MJPG
+    # encoder) which all share the same OpenCV thread pool.
+    cv2.setNumThreads(_thread_cap)
+
     # Warm up CPU info cache
     ci = get_cpu_info()
 
@@ -286,6 +322,9 @@ def init_capture_system() -> bool:
     print(f"Capture system initialised  (mss + MJPG/ffmpeg libx264 + pyaudiowpatch).")
     print(f"  CPU         : {ci['name']}")
     print(f"  Logical CPUs: {ci['logical_cores']}   SIMD: {simd_str}")
+    print(f"  Thread cap  : {_thread_cap} / {ci['logical_cores']} cores "
+          f"({int(MUX_THREAD_FRACTION * 100)}% budget – "
+          f"{ci['logical_cores'] - _thread_cap} core(s) reserved for OS/game)")
     print(f"  Free RAM    : {ram_gb:.1f} GB   Audio chunk: {AUDIO_CHUNK} frames")
     return True
 
@@ -399,9 +438,13 @@ def _mux(video_path: str, loopback_wav, mic_wav, output_path: str,
     audio WAV sources.  System audio and microphone are blended with
     ffmpeg's amix filter.
 
-    -threads 0         : ffmpeg auto-uses all logical CPU cores for encoding
-    -filter_threads N  : parallelise filter-graph work across N threads
-    -filter_complex_threads N: same for complex filter graphs
+    All thread counts are set to _thread_cap (75% of logical cores),
+    computed at init_capture_system() and applied consistently to:
+    -threads N               : libx264 encoder thread pool
+    -filter_threads N        : simple -vf filter workers
+    -filter_complex_threads N: complex filtergraph workers (amix path)
+
+    This leaves the remaining 25% of CPU cores free for the game.
 
     Video params (preset, crf, tune, pix_fmt) come from the active
     video_compression profile.  Audio bitrate is the effective value
@@ -409,12 +452,19 @@ def _mux(video_path: str, loopback_wav, mic_wav, output_path: str,
     """
     import imageio_ffmpeg
 
-    cpu_count    = os.cpu_count() or 2
     ffmpeg       = imageio_ffmpeg.get_ffmpeg_exe()
     cmd          = [ffmpeg, "-y"]
 
-    # ---- thread control ----
-    cmd += ["-threads", "0"]                        # libx264 thread pool
+    # ---- thread control -----------------------------------------------
+    # _thread_cap is 75% of logical cores (set at init).  Passing it
+    # explicitly to every ffmpeg thread pool means libx264, the filter
+    # graph, and I/O all stay within the budget, leaving the remaining
+    # 25% of cores free for the game.
+    #
+    # -threads N          : libx264 encoder thread pool
+    # -filter_threads N   : simple -vf filter workers
+    # -filter_complex_threads N : complex filtergraph workers (amix path)
+    cmd += ["-threads", str(_thread_cap)]
 
     # ---- inputs ----
     cmd += ["-i", video_path]
@@ -435,17 +485,17 @@ def _mux(video_path: str, loopback_wav, mic_wav, output_path: str,
               f"[{audio_src_indices[0]}:a][{audio_src_indices[1]}:a]"
               f"amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]")
         cmd += ["-filter_complex", fc,
-                "-filter_complex_threads", str(cpu_count),
+                "-filter_complex_threads", str(_thread_cap),
                 "-map", "[vout]", "-map", "[aout]",
                 "-vsync", "vfr"]
     elif len(audio_src_indices) == 1:
         cmd += ["-vf", video_filter,
-                "-filter_threads", str(cpu_count),
+                "-filter_threads", str(_thread_cap),
                 "-vsync", "vfr",
                 "-map", "0:v", "-map", f"{audio_src_indices[0]}:a"]
     else:
         cmd += ["-vf", video_filter,
-                "-filter_threads", str(cpu_count),
+                "-filter_threads", str(_thread_cap),
                 "-vsync", "vfr",
                 "-map", "0:v"]
 
@@ -460,7 +510,7 @@ def _mux(video_path: str, loopback_wav, mic_wav, output_path: str,
     cmd += [output_path]
 
     print(f"Muxing (BG)  -> {os.path.basename(output_path)}"
-          f"  [threads={cpu_count}]")
+          f"  [threads={_thread_cap}/{os.cpu_count() or 2}]")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"WARNING: ffmpeg mux failed for {os.path.basename(output_path)}.")
@@ -672,7 +722,8 @@ def _capture_loop(config: dict):
 
     We use max_workers=1 so that only one ffmpeg process runs at a time.
     This keeps CPU load predictable: one core-pool for capture (mss /
-    OpenCV / numpy), one core-pool for encoding (ffmpeg -threads 0).
+    OpenCV / numpy at 75% cap), one core-pool for encoding (ffmpeg at
+    75% cap).  Both pools share the budget; the game always keeps 25%.
     """
     global is_capturing, last_segment_count, current_segment_num
     global pending_mux_count, _mux_executor, _mux_futures
