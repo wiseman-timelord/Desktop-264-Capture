@@ -376,7 +376,7 @@ def configure_settings_screen(config):
         res = config["resolution"]
         cls()
         header("Configure Settings")
-        blank(4)
+        blank(3)
 
         print(f"   1) Resolution         : {res['width']}x{res['height']}"
               f"   (cycles: 1080p / 720p / 480p)")
