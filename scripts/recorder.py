@@ -113,7 +113,7 @@ _PIPE_QUEUE_DEPTH = 30  # frames
 # instead of written to disk.  The limit adapts to available RAM at the
 # start of each segment; this is the ceiling regardless of system size.
 _RAM_BUFFER_HARD_CAP_GB: float = 16.0   # never allocate more than this for video
-_RAM_BUFFER_FRACTION:    float = 0.50   # fraction of *free* RAM to use
+_RAM_BUFFER_FRACTION:    float = 0.50   # default fraction of *free* RAM to use
 
 # ---------------------------------------------------------------------------
 # CPU thread budget
@@ -272,14 +272,19 @@ def _detect_audio_chunk() -> int:
     return 2048
 
 
-def _calc_buffer_limit() -> int:
+def _calc_buffer_limit(config: dict | None = None) -> int:
     """
     Return the maximum bytes the in-RAM video buffer may use for this segment.
     Samples current free RAM each time so successive segments adapt if memory
     pressure changes (e.g. the game loads a large level between segments).
+    Uses the max_ram_usage config setting if available.
     """
+    if config is not None:
+        fraction = config.get("max_ram_usage", 50) / 100.0
+    else:
+        fraction = _RAM_BUFFER_FRACTION
     free_gb   = _get_available_ram_gb()
-    budget_gb = min(free_gb * _RAM_BUFFER_FRACTION, _RAM_BUFFER_HARD_CAP_GB)
+    budget_gb = min(free_gb * fraction, _RAM_BUFFER_HARD_CAP_GB)
     # Floor: at least 512 MB so the buffer is useful even on low-RAM systems.
     budget_gb = max(budget_gb, 0.5)
     return int(budget_gb * (1024 ** 3))
@@ -422,7 +427,7 @@ def init_capture_system() -> bool:
     simd_str = ", ".join(simd) if simd else "none detected"
 
     ram_gb    = _get_available_ram_gb()
-    buf_limit = _calc_buffer_limit()
+    buf_limit = _calc_buffer_limit(None)
     print(f"Capture system initialised  (mss + ffmpeg libx264 pipe + RAM buffer).")
     print(f"  CPU          : {ci['name']}")
     print(f"  Logical CPUs : {ci['logical_cores']}   SIMD: {simd_str}")
@@ -731,7 +736,7 @@ def _capture_segment(config: dict, segment_num: int,
         ctr  += 1
 
     # Adaptive RAM buffer limit for this segment.
-    buf_limit  = _calc_buffer_limit()
+    buf_limit  = _calc_buffer_limit(config)
     video_buf  = _VideoBuffer(max_bytes=buf_limit, spill_path=spill_path)
 
     # current_temp_video shows "RAM" in the monitor display; if spilled the
@@ -743,8 +748,9 @@ def _capture_segment(config: dict, segment_num: int,
     mic_info      = _get_default_mic(_pa)
 
     if segment_num == 1:
+        ram_frac_pct = config.get("max_ram_usage", 50)
         print(f"  Video buffer : {buf_limit / (1024**3):.1f} GB cap "
-              f"(50% of {_get_available_ram_gb():.1f} GB free RAM, "
+              f"({ram_frac_pct}% of {_get_available_ram_gb():.1f} GB free RAM, "
               f"max {_RAM_BUFFER_HARD_CAP_GB:.0f} GB)")
         if loopback_info:
             print(f"  System audio : {loopback_info['name']}")

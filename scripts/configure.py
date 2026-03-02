@@ -9,6 +9,7 @@ import sys
 # Runtime state
 # ---------------------------------------------------------------------------
 is_recording         = False
+is_paused            = False
 recording_start_time = None
 
 # ---------------------------------------------------------------------------
@@ -22,17 +23,13 @@ resolutions = [
     {"width": 854,  "height": 480},    # 480p
 ]
 
+resolution_labels = ["1920x1080 (1080p)", "1280x720 (720p)", "854x480 (480p)"]
+
 fps_options = [30, 45, 60]
 
 # ---------------------------------------------------------------------------
 # Video compression profiles
 # ---------------------------------------------------------------------------
-# Each profile maps to libx264 params passed to ffmpeg during mux.
-# Research-backed: CRF controls quality/size, preset controls CPU/speed,
-# mpdecimate + vfr drop duplicate frames (huge savings on static screens),
-# zerolatency eliminates buffering delay, yuv420p ensures compatibility.
-#
-# Key: "good_quality" / "optimal_performance" / "high_compression"
 video_compression_options = ["Good Quality", "Optimal Performance", "High Compression"]
 
 VIDEO_COMPRESSION = {
@@ -65,19 +62,13 @@ VIDEO_COMPRESSION = {
 # ---------------------------------------------------------------------------
 # Audio compression profiles
 # ---------------------------------------------------------------------------
-# AAC encoder via ffmpeg.  Profile controls the bitrate floor/ceiling
-# applied on top of the user-selected audio bitrate.
-# "Good Quality"          -> user bitrate as-is (highest fidelity)
-# "Optimal Performance"   -> user bitrate (balanced, same numeric but
-#                            flagged so UI can advise; no extra penalty)
-# "High Compression"      -> caps bitrate to save space
 audio_compression_options = ["Good Quality", "Optimal Performance", "High Compression"]
 
 AUDIO_COMPRESSION = {
     "Good Quality": {
         "label":       "Good Quality",
         "description": "Full fidelity at selected bitrate.",
-        "bitrate_cap": None,        # no cap – use selected bitrate as-is
+        "bitrate_cap": None,
     },
     "Optimal Performance": {
         "label":       "Optimal Performance",
@@ -104,11 +95,12 @@ container_format_options = ["MKV", "MP4"]
 # ---------------------------------------------------------------------------
 # Thread budget options  (% of logical cores given to the recorder)
 # ---------------------------------------------------------------------------
-# Lower values leave more CPU headroom for the game being recorded.
-# The recorder applies this cap to: ffmpeg libx264, ffmpeg filter graph,
-# and the OpenCV thread pool.  25% is safest for demanding titles;
-# 75% is the recommended default for most systems.
 thread_budget_options = [25, 50, 75]   # percent
+
+# ---------------------------------------------------------------------------
+# Max RAM usage options  (% of free RAM for video buffer)
+# ---------------------------------------------------------------------------
+max_ram_usage_options = [25, 50, 75]   # percent
 
 # ---------------------------------------------------------------------------
 # Helper: resolve effective audio bitrate
@@ -127,7 +119,6 @@ def get_video_params(config: dict) -> list:
     """
     Build the list of ffmpeg output args for video encoding based on
     the active video-compression profile.
-    Returns a list like ['-preset', 'veryfast', '-crf', '22', ...].
     """
     profile = config.get("video_compression", "Optimal Performance")
     vp      = VIDEO_COMPRESSION.get(profile, VIDEO_COMPRESSION["Optimal Performance"])
@@ -153,7 +144,8 @@ DEFAULT_CONFIG = {
     "audio_bitrate":     192,
     "container_format":  "MKV",
     "video_splits":      False,
-    "thread_budget":     75,     # % of logical cores used by the recorder
+    "thread_budget":     75,
+    "max_ram_usage":     50,
 }
 
 

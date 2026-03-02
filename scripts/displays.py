@@ -1,715 +1,1182 @@
 # scripts/displays.py
-# All console UI screens and menus for Desktop-264-Capture.
-# Extracted from launcher.py so that launcher only holds control flow.
-
-import glob
-import msvcrt
+# Gradio-based GUI for Desktop-264-Capture.
+# Two tabs: Recording (file table / live monitor) and Configure (grouped rows).
+# Dark grey theme throughout.  Status bar + Exit button on every tab.
 import os
-import sys
+import threading
 import time
-
+import gradio as gr
 import scripts.configure as configure
 from scripts import recorder
+from scripts import utilities
 
-# ---------------------------------------------------------------------------
-# Defaults
-# ---------------------------------------------------------------------------
-DEFAULT_OUTPUT = "Output"
+# ===========================================================================
+# Theme: dark greys
+# ===========================================================================
+THEME = gr.themes.Base(
+    primary_hue=gr.themes.colors.gray,
+    secondary_hue=gr.themes.colors.gray,
+    neutral_hue=gr.themes.colors.gray,
+).set(
+    body_background_fill="#1a1a1a",
+    body_background_fill_dark="#1a1a1a",
+    background_fill_primary="#242424",
+    background_fill_primary_dark="#242424",
+    background_fill_secondary="#2e2e2e",
+    background_fill_secondary_dark="#2e2e2e",
+    block_background_fill="#2a2a2a",
+    block_background_fill_dark="#2a2a2a",
+    block_border_color="#3a3a3a",
+    block_border_color_dark="#3a3a3a",
+    block_label_background_fill="#333333",
+    block_label_background_fill_dark="#333333",
+    block_title_text_color="#cccccc",
+    block_title_text_color_dark="#cccccc",
+    body_text_color="#d0d0d0",
+    body_text_color_dark="#d0d0d0",
+    body_text_color_subdued="#888888",
+    body_text_color_subdued_dark="#888888",
+    button_primary_background_fill="#4a4a4a",
+    button_primary_background_fill_dark="#4a4a4a",
+    button_primary_background_fill_hover="#5a5a5a",
+    button_primary_background_fill_hover_dark="#5a5a5a",
+    button_primary_text_color="#e0e0e0",
+    button_primary_text_color_dark="#e0e0e0",
+    button_secondary_background_fill="#383838",
+    button_secondary_background_fill_dark="#383838",
+    button_secondary_background_fill_hover="#484848",
+    button_secondary_background_fill_hover_dark="#484848",
+    button_secondary_text_color="#c0c0c0",
+    button_secondary_text_color_dark="#c0c0c0",
+    input_background_fill="#333333",
+    input_background_fill_dark="#333333",
+    input_border_color="#444444",
+    input_border_color_dark="#444444",
+    border_color_accent="#555555",
+    border_color_accent_dark="#555555",
+    color_accent_soft="#3a3a3a",
+    color_accent_soft_dark="#3a3a3a",
+)
 
-# ---------------------------------------------------------------------------
-# UI constants
-# ---------------------------------------------------------------------------
-BAR = "=" * 79
-SEP = "-" * 79
-W   = 79
-CONSOLE_LINES = 30          # matches `mode con cols=80 lines=30` in .bat
+# ===========================================================================
+# Custom CSS
+# ===========================================================================
+CUSTOM_CSS = """
+/* ---- Global ---- */
+.gradio-container {
+    max-width: 1200px !important;
+    width: 95% !important;
+    margin: auto;
+    background: #1a1a1a !important;
+    font-family: 'Segoe UI', Consolas, sans-serif;
+}
+/* ---- Tab styling ---- */
+.tab-nav button {
+    background: #2a2a2a !important;
+    color: #999 !important;
+    border: 1px solid #3a3a3a !important;
+    font-weight: 600;
+    font-size: 0.95rem;
+    padding: 10px 28px !important;
+}
+.tab-nav button.selected {
+    background: #3a3a3a !important;
+    color: #ffffff !important;
+    border-bottom: 2px solid #aaaaaa !important;
+}
+/* ---- Info boxes (read-only textboxes used as display panels) ---- */
+.info-box input, .info-box textarea {
+    background: #222 !important;
+    color: #ccc !important;
+    border: 1px solid #3a3a3a !important;
+    font-family: Consolas, 'Courier New', monospace !important;
+    font-size: 0.85rem !important;
+    text-align: center !important;
+}
+.info-box label span {
+    color: #888 !important;
+    font-size: 0.78rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.04em;
+}
+/* ---- Totals row ---- */
+.totals-box input {
+    background: #262626 !important;
+    color: #aaa !important;
+    border: 1px solid #333 !important;
+    font-family: Consolas, monospace !important;
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+    text-align: center !important;
+}
+/* ---- File table ---- */
+.file-table {
+    font-size: 0.82rem !important;
+}
+.file-table table {
+    background: #222 !important;
+}
+.file-table th {
+    background: #333 !important;
+    color: #bbb !important;
+    font-weight: 600 !important;
+    font-size: 0.8rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.03em;
+}
+.file-table td {
+    background: #252525 !important;
+    color: #ccc !important;
+    border-color: #333 !important;
+    font-family: Consolas, monospace !important;
+    font-size: 0.82rem !important;
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+    line-height: 1.15 !important;
+}
+/* Grow table naturally with content, min 5 rows */
+.file-table .table-wrap {
+    overflow-y: auto !important;
+}
+/* ---- Recording info boxes ---- */
+.rec-info-box input {
+    background: #1e1e1e !important;
+    color: #e0e0e0 !important;
+    border: 1px solid #444 !important;
+    font-family: Consolas, monospace !important;
+    font-size: 0.95rem !important;
+    font-weight: 700 !important;
+    text-align: center !important;
+}
+.rec-info-box label span {
+    color: #888 !important;
+    font-size: 0.72rem !important;
+    text-transform: uppercase !important;
+}
+/* ---- Segment stack box ---- */
+.seg-stack textarea {
+    background: #1a1a1a !important;
+    color: #8c8 !important;
+    border: 1px solid #383838 !important;
+    font-family: Consolas, monospace !important;
+    font-size: 0.8rem !important;
+    line-height: 1.5 !important;
+}
+/* ---- Encode log ---- */
+.encode-log textarea {
+    background: #1a1a1a !important;
+    color: #8a8 !important;
+    font-family: Consolas, monospace !important;
+    font-size: 0.78rem !important;
+    border: 1px solid #333 !important;
+}
+/* ---- Status bar ---- */
+.status-bar input {
+    background: #262626 !important;
+    color: #999 !important;
+    border: 1px solid #333 !important;
+    font-size: 0.82rem !important;
+}
+/* ---- Buttons ---- */
+.record-btn {
+    background: #c0392b !important;
+    color: white !important;
+    font-weight: 700 !important;
+    min-height: 42px;
+}
+.record-btn:hover { background: #e74c3c !important; }
+.stop-btn {
+    background: #555 !important;
+    color: #eee !important;
+    font-weight: 700 !important;
+    min-height: 42px;
+}
+.stop-btn:hover { background: #777 !important; }
+.purge-btn {
+    background: #7f1d1d !important;
+    color: #fca5a5 !important;
+    font-weight: 600 !important;
+}
+.purge-btn:hover { background: #991b1b !important; }
+/* Save Configuration — orange */
+.save-btn {
+    background: #c2560a !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    min-height: 0 !important;
+    height: 38px !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    padding: 0 8px !important;
+}
+.save-btn:hover { background: #ea6f0e !important; }
+/* Exit button — force red regardless of theme */
+.exit-btn {
+    min-width: 110px;
+    background: #b91c1c !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    min-height: 0 !important;
+    height: 38px !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    padding: 0 8px !important;
+}
+.exit-btn:hover { background: #dc2626 !important; }
+/* ---- Config section labels ---- */
+.cfg-section-label p {
+    color: #888 !important;
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid #333;
+    padding-bottom: 4px;
+    margin-bottom: 0 !important;
+}
+/* ---- Hide Gradio footer ---- */
+footer { display: none !important; }
+/* ---- About page header ---- */
+.about-header p, .about-header h2, .about-header li, .about-header a {
+    color: #cccccc !important;
+}
+.about-header a {
+    color: #7ab4f5 !important;
+    text-decoration: none;
+}
+.about-header a:hover { text-decoration: underline; }
+.about-header h2 {
+    font-size: 1.3rem !important;
+    font-weight: 700 !important;
+    margin-bottom: 2px !important;
+}
+"""
 
-# Filename prefix used by recorder and matched by purge.
-VIDEO_PREFIX = "Desktop_Video_"
+# ===========================================================================
+# Shared state
+# ===========================================================================
+_shutdown_event = threading.Event()
 
-# ---------------------------------------------------------------------------
-# UI primitives
-# ---------------------------------------------------------------------------
-def cls():
-    os.system("cls")
+# ===========================================================================
+# Helper: build file table data
+# ===========================================================================
+_MIN_TABLE_ROWS = 5   # minimum rows shown; expands 1-per-file beyond this
 
-
-def header(subtitle=""):
-    """Print the standard 3-line header block."""
-    print(BAR)
-    if subtitle:
-        title = f"   Desktop-264-Capture : {subtitle}"
-    else:
-        title = "   Desktop-264-Capture"
-    print(title)
-    print(BAR)
-
-
-def footer():
-    print(SEP)
-
-
-def blank(n=1):
-    for _ in range(n):
-        print()
-
-
-def fmt_bytes(n):
-    """Human-readable file size."""
-    if n < 1024:
-        return f"{n} B"
-    elif n < 1024 ** 2:
-        return f"{n / 1024:.1f} KB"
-    elif n < 1024 ** 3:
-        return f"{n / 1024 ** 2:.1f} MB"
-    else:
-        return f"{n / 1024 ** 3:.2f} GB"
-
-
-def fmt_time(seconds):
-    return time.strftime("%H:%M:%S", time.gmtime(int(seconds)))
-
-
-# ---------------------------------------------------------------------------
-# Output path helper
-# ---------------------------------------------------------------------------
-def resolve_output_path(user_input):
+def _build_file_table(config: dict):
+    """Return (dataframe_rows, total_files_str, total_size_str, output_folder_str).
+    Shows the most-recent files up to _MIN_TABLE_ROWS minimum rows.
+    Starts at 5 rows (files + empty padding), then grows 1 row per extra file.
     """
-    Accept any valid directory path the user provides.
-    - Absolute paths (e.g. G:\\Videos\\Output) are accepted directly.
-    - Relative paths are resolved relative to .\\Output\\.
-    - Blank input returns None (caller keeps current value).
-    """
-    if not user_input:
-        return None
+    out_path = config.get("output_path", utilities.DEFAULT_OUTPUT)
+    videos   = utilities.list_videos(out_path)
 
-    raw  = user_input.strip()
-    norm = os.path.normpath(raw)
-
-    # Absolute path – accept as-is
-    if os.path.isabs(norm):
-        return norm
-
-    # Relative path – anchor inside .\Output\ if not already
-    parts = norm.split(os.sep)
-    if parts[0].lower() == DEFAULT_OUTPUT.lower():
-        return norm
-    return os.path.join(DEFAULT_OUTPUT, norm)
-
-
-# ---------------------------------------------------------------------------
-# Folder listing helpers
-# ---------------------------------------------------------------------------
-def _list_videos(output_path):
-    """
-    Return a list of (filename, size_bytes) for Desktop_Video_* files
-    in output_path, sorted newest-first by modification time.
-    """
-    if not os.path.isdir(output_path):
-        return []
-
-    pattern = os.path.join(output_path, f"{VIDEO_PREFIX}*")
-    files   = glob.glob(pattern)
-
-    entries = []
-    for fp in files:
-        if os.path.isfile(fp):
-            entries.append((fp, os.path.getmtime(fp), os.path.getsize(fp)))
-
-    entries.sort(key=lambda e: e[1], reverse=True)
-    return [(os.path.basename(e[0]), e[2]) for e in entries]
-
-
-def _display_path(out_path):
-    """Friendly display: relative with .\\ prefix when inside cwd, else full."""
-    try:
-        rel = os.path.relpath(out_path)
-        if not rel.startswith(".."):
-            return f".\\{rel}"
-    except ValueError:
-        pass   # different drive on Windows – keep absolute
-    return out_path
-
-
-# ---------------------------------------------------------------------------
-# Main menu screen  (fixed 28-line layout, no dampening needed)
-# ---------------------------------------------------------------------------
-def main_menu_screen(config):
-    """
-    Display the main menu once and return the user's choice string.
-
-    Layout (fixed 28 lines, fits cleanly in 30-line console):
-      3  header
-      1  blank
-      1  Videos Folder label
-      1  folder path
-      1  blank
-      1  Folder Contents label
-      5  file slots  (always exactly 5 – pads unused slots with "(empty)")
-      1  blank
-      1  mid-separator
-      1  blank
-      1  option 1
-      1  blank
-      1  option 2
-      1  blank
-      1  option 3
-      1  blank
-      1  option 4
-      2  blank
-      1  bottom separator
-      1  input prompt
-    ──
-     28  total
-    """
-    out_path = config.get("output_path", DEFAULT_OUTPUT)
-    videos   = _list_videos(out_path)
-
-    # Always display exactly 5 slots; pad any unused slots with "(empty)".
-    # _list_videos already sorts newest-first, so we just take the top 5.
-    MAX_SLOTS = 5
-    shown     = videos[:MAX_SLOTS]
-    slots     = len(shown)
-
-    cls()
-    header()
-    blank() 
-
-    print(" Videos Folder:")
-    print(f"     {_display_path(out_path)}") 
-    blank() 
-
-    print(" Recent Files:")      
-    for name, size in shown:                        # lines 9-13 (up to 5 real files)
-        print(f"    {name}  ({fmt_bytes(size)})")
-    for _ in range(MAX_SLOTS - slots):              # pad remaining slots with "(empty)"
-        print("    (empty)")
-    blank()
-    blank() 
-
-    footer() 
-    blank()
-    print("   1) Start Recording")
-    blank()
-    print("   2) Configure Settings")
-    blank()
-    print("   3) System Information")
-    blank()
-    print("   4) Purge Recordings") 
-    blank(2)      
-    footer()
-    choice = input("Selection; Menu Options = 1-4, Quit = Q: ").strip()
-    return choice
-
-
-# ---------------------------------------------------------------------------
-# Purge recordings screen
-# ---------------------------------------------------------------------------
-def purge_recordings_screen(config):
-    """
-    Ask for confirmation, then delete all Desktop_Video_* files in the
-    configured output folder.  Returns the number of files deleted.
-    """
-    out_path = config.get("output_path", DEFAULT_OUTPUT)
-    videos   = _list_videos(out_path)
-
-    cls()
-    header("Purge Recordings")
-    blank(8)
+    folder_str = utilities.display_path(out_path)
+    empty_row  = [" ", " ", " "]
 
     if not videos:
-        print("   No recordings found to purge.")
-        blank(11)
-        footer()
-        input("   Press ENTER to return to menu ... ")
-        return 0
+        rows = [["  - empty -", " ", " "]] + [empty_row] * (_MIN_TABLE_ROWS - 1)
+        return rows, "0", "0 B", folder_str
 
-    total_size = sum(s for _, s in videos)
-    print(f"   Output folder : {_display_path(out_path)}")
-    print(f"   Files found   : {len(videos)}")
-    print(f"   Total size    : {fmt_bytes(total_size)}")
-    blank()
-    print(f"   This will delete ALL files matching '{VIDEO_PREFIX}*'")
-    print("   in the output folder.  This cannot be undone.")
-    blank(8)
-    footer()
-    confirm = input("   Type YES to confirm purge, or press ENTER to cancel: ").strip()
+    data_rows  = [[v["name"], v["size_str"], v["date"]] for v in videos]
+    pad_needed = max(0, _MIN_TABLE_ROWS - len(data_rows))
+    rows       = data_rows + [empty_row] * pad_needed
 
-    if confirm == "YES":
-        deleted = 0
-        for name, _ in videos:
-            fp = os.path.join(out_path, name)
-            try:
-                os.remove(fp)
-                deleted += 1
-            except OSError as e:
-                print(f"   WARNING: could not delete {name}: {e}")
+    total_size = sum(v["size"] for v in videos)
+    return (
+        rows,
+        str(len(videos)),
+        utilities.fmt_bytes(total_size),
+        folder_str,
+    )
 
-        cls()
-        header("Purge Recordings")
-        blank(11)
-        print(f"   Purged {deleted} of {len(videos)} recording(s).")
-        blank(11)
-        footer()
-        input("   Press ENTER to return to menu ... ")
-        return deleted
-    else:
-        cls()
-        header("Purge Recordings")
-        blank(10)
-        print("   Purge cancelled.")
-        blank(10)
-        footer()
-        time.sleep(1)
-        return 0
+# ===========================================================================
+# Helper: build recording monitor values
+# ===========================================================================
+def _build_rec_values(config: dict) -> dict:
+    """Return a dict of all recording display values for the GUI boxes."""
+    d = {
+        "status":        "IDLE",
+        "elapsed":       "00:00:00",
+        "resolution":    "--",
+        "fps":           "--",
+        "video_prof":    "--",
+        "audio_prof":    "--",
+        "segment":       "--",
+        "seg_progress":  0.0,
+        "seg_label":     "Segment: --",
+        "output_dir":    config.get("output_path", "Output"),
+        "stack_text":    " ",
+        "encode_log":    " ",
+    }
+    if not configure.is_recording or configure.recording_start_time is None:
+        return d
 
+    elapsed     = time.time() - configure.recording_start_time
+    seg_elapsed = recorder.current_segment_elapsed()
+    seg_num     = recorder.current_segment_num
+    splits_on   = config.get("video_splits", False)
+    split_dur   = recorder.SPLIT_DURATION if splits_on else 0
 
-# ---------------------------------------------------------------------------
-# Recording monitor screen
-# ---------------------------------------------------------------------------
-def recording_monitor(config):
-    """
-    Full-screen live status loop while recording.
-    Press ENTER to stop.  Blocks until mux is complete, then shows results.
-    """
     res = config["resolution"]
-    fps = config["fps"]
-    out = config["output_path"]
+    ab  = configure.effective_audio_bitrate(config)
 
-    vc_label     = config.get("video_compression", "Optimal Performance")
-    ac_label     = config.get("audio_compression", "Optimal Performance")
-    ab_kbps      = configure.effective_audio_bitrate(config)
-    splits_on    = config.get("video_splits", False)
+    d["status"]     = "● RECORDING"
+    d["elapsed"]    = utilities.fmt_time(elapsed)
+    d["resolution"] = f"{res['width']}x{res['height']}"
+    d["fps"]        = str(config["fps"])
+    d["video_prof"] = config.get("video_compression", "Optimal Performance")
+    d["audio_prof"] = f"{config.get('audio_compression', 'Optimal Performance')}  ({ab} kbps)"
+    d["output_dir"] = config.get("output_path", "Output")
 
-    # Drain any buffered keypress so the loop doesn't exit immediately
-    while msvcrt.kbhit():
-        msvcrt.getwch()
-
-    while configure.is_recording:
-        elapsed    = time.time() - configure.recording_start_time
-        tmp        = recorder.current_temp_video
-        tmp_size   = os.path.getsize(tmp) if (tmp and os.path.exists(tmp)) else 0
-        mux_pending = recorder.pending_mux_count
-
-        cls()
-        header("Recording")
-        blank(7)
-        print(f"   Status        : RECORDING  [{fmt_time(elapsed)}]")
-        blank()
-        print(f"   Resolution    : {res['width']}x{res['height']}")
-        print(f"   FPS Target    : {fps}")
-        print(f"   Video Profile : {vc_label}")
-        print(f"   Audio Profile : {ac_label}  ({ab_kbps} kbps)")
-        blank()
-        if splits_on:
-            seg_elapsed = recorder.current_segment_elapsed()
-            print(f"   Segment       : {recorder.current_segment_num}  "
-                  f"[{fmt_time(seg_elapsed)} / 1:00:00]")
-        print(f"   Temp Size     : {fmt_bytes(tmp_size)}")
-        print(f"   Output Dir    : {out}")
-        if mux_pending > 0:
-            # Use the blank slot that would otherwise be empty to show mux status
-            print(f"   Muxing BG     : {mux_pending} segment(s) encoding ...")
-            blank(4 if splits_on else 5)
-        else:
-            blank(5 if splits_on else 6)
-        footer()
-        print("Press ENTER to stop recording ...")
-        
-        # Poll for ENTER (~1 s in 100 ms slices so display refreshes)
-        for _ in range(10):
-            if msvcrt.kbhit():
-                key = msvcrt.getwch()
-                if key in ("\r", "\n"):
-                    configure.is_recording = False
-                    break
-            time.sleep(0.1)
-
-    # Signal the capture thread and wait for mux
-    cls()
-    header("Recording")
-    blank(8)
-    print("   Stopping capture ...")
-    print("   Finalising segments (background mux) - please wait ...")
-    blank()
-    footer()
-
-    recorder.stop_capture()
-    configure.is_recording         = False
-    configure.recording_start_time = None
-
-    # Results screen
-    output_file   = recorder.last_output_file
-    seg_count     = recorder.last_segment_count
-    file_size     = 0
-    if output_file and os.path.exists(output_file):
-        file_size = os.path.getsize(output_file)
-
-    cls()
-    header("Recording Complete")
-    blank(10)
-    if output_file:
-        if seg_count and seg_count > 1:
-            print(f"   Segments: {seg_count} files saved to {config['output_path']}")
-            blank(1)
-            print(f"   Last Seg: {output_file}")
-            blank(1)
-            print(f"   Last Size: {fmt_bytes(file_size)}")
-        else:
-            print(f"   File    : {output_file}")
-            blank(1)
-            print(f"   Size    : {fmt_bytes(file_size)}")
+    # Segment progress
+    if splits_on and split_dur > 0:
+        seg_pct = min(seg_elapsed / split_dur, 1.0)
+        d["segment"] = (
+            f"S{seg_num:03d}    "
+            f"[{utilities.fmt_time(seg_elapsed)} / {utilities.fmt_time(split_dur)}]"
+        )
     else:
-        print("   WARNING : Output file not found - check Output folder.")
-    blank(10)
-    footer()
-    input("   Press ENTER to return to menu ... ")
+        seg_pct = min(seg_elapsed / 3600.0, 1.0)
+        d["segment"] = f"S{seg_num:03d}   [{utilities.fmt_time(seg_elapsed)}]"
+    d["seg_progress"] = seg_pct
+    d["seg_label"]    = f"Segment {seg_num}:  {seg_pct * 100:.0f}%"
 
+    # Stack text
+    saved       = recorder.last_segment_count
+    mux_pending = recorder.pending_mux_count
+    stack = []
+    if saved > 0:
+        stack.append(f"  \u2714  Saved to disk     {saved} file(s)")
+    if mux_pending > 0:
+        stack.append(f"  \u27F3  Encoding (BG)     {mux_pending} segment(s)")
+    stack.append(f"  \u25CF  Recording now     S{seg_num:03d}")
+    d["stack_text"] = "\n".join(stack)
 
-# ---------------------------------------------------------------------------
-# Configure settings screen  (top-level)
-# ---------------------------------------------------------------------------
-def configure_settings_screen(config):
-    """Master settings menu - delegates to sub-screens."""
+    # Encode log
+    log = []
+    if mux_pending > 0:
+        log.append(f"[MUX] {mux_pending} segment(s) encoding  (stream-copy + AAC)...")
+    last = recorder.last_output_file
+    if last:
+        log.append(f"[DONE] {os.path.basename(last)}")
+    d["encode_log"] = "\n".join(log)
 
-    while True:
-        res = config["resolution"]
-        cls()
-        header("Configure Settings")
-        blank(3)
+    return d
 
-        print(f"   1) Resolution         : {res['width']}x{res['height']}"
-              f"   (cycles: 1080p / 720p / 480p)")
-        blank()
-        print(f"   2) FPS                : {config['fps']}"
-              f"   (cycles: 30 / 45 / 60)")
-        blank()
-        print(f"   3) Video Compression  : {config.get('video_compression', 'Optimal Performance')}")
-        blank()
-        print(f"   4) Audio Bitrate      : {config.get('audio_bitrate', 192)} kbps"
-              f"   (cycles: 96 / 128 / 160 / 192 / 256)")
-        blank()
-        print(f"   5) Audio Compression  : {config.get('audio_compression', 'Optimal Performance')}")
-        blank()
-        print(f"   6) Output Directory   : {config['output_path']}")
-        blank()
-        print(f"   7) Container Format   : {config.get('container_format', 'MKV')}"
-              f"   (cycles: MKV / MP4)")
-        blank()
-        splits_val = "True" if config.get("video_splits", False) else "False"
-        print(f"   8) 1Hr Video Splits   : {splits_val}"
-              f"   (Save in 1Hr Segments)")
-        blank()
-        tb_pct = config.get("thread_budget", 75)
-        print(f"   9) Max Threads Used   : {tb_pct}%"
-              f"   (cycles: 25% / 50% / 75%)")
-        blank(3)
-        footer()
-        choice = input("   Selection; Options = 1-9, Back = B: ").strip()
+# ===========================================================================
+# Build the Gradio interface
+# ===========================================================================
+def build_interface(config: dict, start_cb, stop_cb, exit_cb):
+    """
+    Construct and return the Gradio Blocks app.
+    Parameters
+    ----------
+    config     : current configuration dict (mutable reference)
+    start_cb   : callable()  - begin recording
+    stop_cb    : callable()  - stop recording
+    exit_cb    : callable()  - shut down the application
+    """
 
-        # ---- 1) Resolution (cycle) ----
-        if choice == "1":
-            res_index = 0
-            for i, r in enumerate(configure.resolutions):
-                if (r["width"] == config["resolution"]["width"]
-                        and r["height"] == config["resolution"]["height"]):
-                    res_index = i
-                    break
-            res_index = (res_index + 1) % len(configure.resolutions)
-            config["resolution"] = configure.resolutions[res_index]
-            configure.save_configuration(config)
+    with gr.Blocks(
+        title="Desktop-264-Capture",
+    ) as app:
 
-        # ---- 2) FPS (cycle) ----
-        elif choice == "2":
-            fps_index = 0
-            if config.get("fps") in configure.fps_options:
-                fps_index = configure.fps_options.index(config["fps"])
-            fps_index = (fps_index + 1) % len(configure.fps_options)
-            config["fps"] = configure.fps_options[fps_index]
-            configure.save_configuration(config)
+        with gr.Tabs() as tabs:
 
-        # ---- 3) Video compression (sub-screen) ----
-        elif choice == "3":
-            config = _video_compression_screen(config)
+            # =======================================================================
+            # TAB 1 - RECORDING
+            # =======================================================================
+            with gr.Tab("Recording", id="tab_rec"):
 
-        # ---- 4) Audio bitrate (cycle) ----
-        elif choice == "4":
-            opts = configure.audio_bitrate_options
-            cur  = config.get("audio_bitrate", 192)
-            idx  = opts.index(cur) if cur in opts else 0
-            idx  = (idx + 1) % len(opts)
-            config["audio_bitrate"] = opts[idx]
-            configure.save_configuration(config)
+                # --- Initial table data ---
+                init_rows, init_count, init_size, init_folder = \
+                    _build_file_table(config)
 
-        # ---- 5) Audio compression (sub-screen) ----
-        elif choice == "5":
-            config = _audio_compression_screen(config)
+                # --- Files panel   (visible when NOT recording) -------------
+                with gr.Column(visible=True) as files_panel:
 
-        # ---- 6) Output directory ----
-        elif choice == "6":
-            config = _output_dir_screen(config)
+                    # Output folder box
+                    out_folder_box = gr.Textbox(
+                        value=init_folder,
+                        label="Output Folder",
+                        interactive=False,
+                        max_lines=1,
+                        elem_classes=["info-box"],
+                    )
 
-        # ---- 7) Container format (cycle) ----
-        elif choice == "7":
-            opts = configure.container_format_options
-            cur  = config.get("container_format", "MKV")
-            idx  = opts.index(cur) if cur in opts else 0
-            idx  = (idx + 1) % len(opts)
-            config["container_format"] = opts[idx]
-            configure.save_configuration(config)
+                    # File table
+                    file_table = gr.Dataframe(
+                        value=init_rows,
+                        headers=["Filename", "Size", "Date"],
+                        datatype=["str", "str", "str"],
+                        interactive=False,
+                        row_count=(_MIN_TABLE_ROWS, "dynamic"),
+                        column_count=(3, "fixed"),
+                        elem_classes=["file-table"],
+                    )
 
-        # ---- 8) 1Hr video splits (toggle) ----
-        elif choice == "8":
-            config["video_splits"] = not config.get("video_splits", False)
-            configure.save_configuration(config)
+                    # Totals row  (Total Files | Total Size | Purge All)
+                    with gr.Row():
+                        total_files_box = gr.Textbox(
+                            value=init_count,
+                            label="Total Files",
+                            interactive=False,
+                            max_lines=1,
+                            elem_classes=["totals-box"],
+                        )
+                        total_size_box = gr.Textbox(
+                            value=init_size,
+                            label="Total Size",
+                            interactive=False,
+                            max_lines=1,
+                            elem_classes=["totals-box"],
+                        )
+                        rec_purge_btn = gr.Button(
+                            "\U0001F5D1  Purge All Files",
+                            variant="stop",
+                            elem_classes=["purge-btn"],
+                            scale=1,
+                        )
 
-        # ---- 9) Thread budget (cycle 25 / 50 / 75) ----
-        elif choice == "9":
-            opts = configure.thread_budget_options   # [25, 50, 75]
-            cur  = config.get("thread_budget", 75)
-            idx  = opts.index(cur) if cur in opts else 2   # default to 75%
-            idx  = (idx + 1) % len(opts)
-            config["thread_budget"] = opts[idx]
-            configure.save_configuration(config)
+                # --- Recording panel  (visible WHILE recording) ------------
+                with gr.Column(visible=False) as rec_panel:
 
-        elif choice.upper() == "B":
-            break
+                    # Top info boxes: Status | Elapsed | Segment
+                    with gr.Row():
+                        rec_status_box = gr.Textbox(
+                            value="IDLE",
+                            label="Status",
+                            interactive=False,
+                            max_lines=1,
+                            elem_classes=["rec-info-box"],
+                            scale=2,
+                        )
+                        rec_elapsed_box = gr.Textbox(
+                            value="00:00:00",
+                            label="Elapsed",
+                            interactive=False,
+                            max_lines=1,
+                            elem_classes=["rec-info-box"],
+                            scale=2,
+                        )
+                        rec_segment_box = gr.Textbox(
+                            value="--",
+                            label="Segment",
+                            interactive=False,
+                            max_lines=1,
+                            elem_classes=["rec-info-box"],
+                            scale=3,
+                        )
 
-    return config
+                    # Settings boxes: Resolution | FPS | Video Profile
+                    with gr.Row():
+                        rec_res_box = gr.Textbox(
+                            value="--",
+                            label="Resolution",
+                            interactive=False,
+                            max_lines=1,
+                            elem_classes=["rec-info-box"],
+                        )
+                        rec_fps_box = gr.Textbox(
+                            value="--",
+                            label="FPS",
+                            interactive=False,
+                            max_lines=1,
+                            elem_classes=["rec-info-box"],
+                        )
+                        rec_vprof_box = gr.Textbox(
+                            value="--",
+                            label="Video Profile",
+                            interactive=False,
+                            max_lines=1,
+                            elem_classes=["rec-info-box"],
+                        )
 
+                    # Audio Profile | Output Dir
+                    with gr.Row():
+                        rec_aprof_box = gr.Textbox(
+                            value="--",
+                            label="Audio Profile",
+                            interactive=False,
+                            max_lines=1,
+                            elem_classes=["rec-info-box"],
+                            scale=2,
+                        )
+                        rec_outdir_box = gr.Textbox(
+                            value="--",
+                            label="Output Dir",
+                            interactive=False,
+                            max_lines=1,
+                            elem_classes=["rec-info-box"],
+                            scale=3,
+                        )
 
-# ---------------------------------------------------------------------------
-# Video compression sub-screen
-# ---------------------------------------------------------------------------
-def _video_compression_screen(config):
-    current = config.get("video_compression", "Optimal Performance")
-    options = configure.video_compression_options
+                    # Segment progress bar
+                    seg_progress = gr.Slider(
+                        minimum=0,
+                        maximum=1,
+                        value=0,
+                        label="Segment: --",
+                        interactive=False,
+                    )
 
-    while True:
-        cls()
-        header("Video Compression")
-        blank(6)
+                    # Segment stack
+                    seg_stack_box = gr.Textbox(
+                        value=" ",
+                        label="Segments",
+                        lines=1,
+                        max_lines=20,
+                        interactive=False,
+                        elem_classes=["seg-stack"],
+                    )
 
-        for i, opt in enumerate(options, 1):
-            profile = configure.VIDEO_COMPRESSION[opt]
-            marker  = " <--" if opt == current else ""
-            print(f"   {i}) {opt}{marker}")
-            print(f"      {profile['description']}")
-            print(f"      preset={profile['preset']}  crf={profile['crf']}  "
-                  f"tune={profile['tune']}")
-            blank()
+                    # Encode log
+                    encode_log = gr.Textbox(
+                        value=" ",
+                        label="Encode Log",
+                        lines=2,
+                        max_lines=3,
+                        interactive=False,
+                        elem_classes=["encode-log"],
+                    )
 
-        blank(5)
-        footer()
-        sel = input("   Selection; Options = 1-3, Back = B: ").strip()
+                # --- Control buttons --------------------------------------
+                # Visibility rules:
+                #   idle     → Start only
+                #   recording→ Pause + Stop
+                #   paused   → Resume + Stop
+                with gr.Row():
+                    rec_start_btn = gr.Button(
+                        "\u23FA  Start Recording",
+                        variant="primary",
+                        elem_classes=["record-btn"],
+                        scale=3,
+                        visible=True,
+                    )
+                    rec_pause_btn = gr.Button(
+                        "\u23F8  Pause",
+                        variant="secondary",
+                        elem_classes=["stop-btn"],
+                        scale=3,
+                        visible=False,
+                    )
+                    rec_resume_btn = gr.Button(
+                        "\u25B6  Resume",
+                        variant="primary",
+                        elem_classes=["record-btn"],
+                        scale=3,
+                        visible=False,
+                    )
+                    rec_stop_btn = gr.Button(
+                        "\u23F9  Stop Recording",
+                        variant="secondary",
+                        elem_classes=["stop-btn"],
+                        scale=3,
+                        visible=False,
+                    )
 
-        if sel in ("1", "2", "3"):
-            idx = int(sel) - 1
-            config["video_compression"] = options[idx]
-            configure.save_configuration(config)
-            current = options[idx]
-        elif sel.upper() == "B":
-            break
+                # --- Polling timer ----------------------------------------
+                rec_timer = gr.Timer(value=1.0, active=False)
 
-    return config
+                # --- Status bar -------------------------------------------
+                with gr.Row():
+                    rec_status = gr.Textbox(
+                        value="Ready.",
+                        label="Status",
+                        interactive=False,
+                        max_lines=1,
+                        scale=20,
+                        elem_classes=["status-bar"],
+                    )
+                    exit_rec = gr.Button(
+                        "Exit Program",
+                        variant="secondary",
+                        scale=1,
+                        elem_classes=["exit-btn"],
+                    )
 
+                # ----------------------------------------------------------
+                # Recording tab callbacks
+                # ----------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Audio compression sub-screen
-# ---------------------------------------------------------------------------
-def _audio_compression_screen(config):
-    current = config.get("audio_compression", "Optimal Performance")
-    options = configure.audio_compression_options
+                # All recording-panel output components in canonical order:
+                _rec_panel_outputs = [
+                    rec_status_box, rec_elapsed_box, rec_segment_box,
+                    rec_res_box, rec_fps_box, rec_vprof_box,
+                    rec_aprof_box, rec_outdir_box,
+                    seg_progress, seg_stack_box, encode_log,
+                ]
 
-    while True:
-        cls()
-        header("Audio Compression")
-        blank(6)
+                def _apply_rec_values(rv: dict) -> list:
+                    """Map a rec-values dict to gr.update() list for the panel."""
+                    return [
+                        gr.update(value=rv["status"]),
+                        gr.update(value=rv["elapsed"]),
+                        gr.update(value=rv["segment"]),
+                        gr.update(value=rv["resolution"]),
+                        gr.update(value=rv["fps"]),
+                        gr.update(value=rv["video_prof"]),
+                        gr.update(value=rv["audio_prof"]),
+                        gr.update(value=rv["output_dir"]),
+                        gr.update(value=rv["seg_progress"], label=rv["seg_label"]),
+                        gr.update(value=rv["stack_text"]),
+                        gr.update(value=rv["encode_log"]),
+                    ]
 
-        eff = configure.effective_audio_bitrate(config)
-        print(f"   Selected bitrate : {config.get('audio_bitrate', 192)} kbps")
-        print(f"   Effective output : {eff} kbps  (after profile cap)")
-        blank()
+                # Button visibility helpers
+                def _btn_idle():
+                    """Start visible; Pause, Resume, Stop hidden."""
+                    return (
+                        gr.update(visible=True),   # start
+                        gr.update(visible=False),  # pause
+                        gr.update(visible=False),  # resume
+                        gr.update(visible=False),  # stop
+                    )
 
-        for i, opt in enumerate(options, 1):
-            profile = configure.AUDIO_COMPRESSION[opt]
-            marker  = " <--" if opt == current else ""
-            cap_str = (f"{profile['bitrate_cap']} kbps cap"
-                       if profile["bitrate_cap"] else "no cap")
-            print(f"   {i}) {opt}{marker}")
-            print(f"      {profile['description']}  ({cap_str})")
-            blank()
+                def _btn_recording():
+                    """Pause + Stop visible; Start, Resume hidden."""
+                    return (
+                        gr.update(visible=False),  # start
+                        gr.update(visible=True),   # pause
+                        gr.update(visible=False),  # resume
+                        gr.update(visible=True),   # stop
+                    )
 
-        blank(5)
-        footer()
-        sel = input("   Selection; Options = 1-3, Back = B: ").strip()
+                def _btn_paused():
+                    """Resume + Stop visible; Start, Pause hidden."""
+                    return (
+                        gr.update(visible=False),  # start
+                        gr.update(visible=False),  # pause
+                        gr.update(visible=True),   # resume
+                        gr.update(visible=True),   # stop
+                    )
 
-        if sel in ("1", "2", "3"):
-            idx = int(sel) - 1
-            config["audio_compression"] = options[idx]
-            configure.save_configuration(config)
-            current = options[idx]
-        elif sel.upper() == "B":
-            break
+                def on_start_recording():
+                    if configure.is_recording:
+                        noop = [gr.update()] * 11
+                        return (
+                            [gr.update(), gr.update()]   # panels
+                            + noop                       # rec boxes
+                            + list(_btn_idle())          # 4 buttons
+                            + [gr.update()]              # timer
+                            + ["Already recording."]     # status
+                        )
 
-    return config
+                    start_cb()
+                    rv = _build_rec_values(config)
+                    updates = _apply_rec_values(rv)
 
+                    return (
+                        [gr.update(visible=False), gr.update(visible=True)]
+                        + updates
+                        + list(_btn_recording())
+                        + [gr.update(active=True)]
+                        + ["Recording..."]
+                    )
 
-# ---------------------------------------------------------------------------
-# Output directory sub-screen
-# ---------------------------------------------------------------------------
-def _output_dir_screen(config):
-    cls()
-    header("Configure Settings : Output Directory")
-    blank(4)
-    print(f"   Current output folder : {config['output_path']}")
-    blank()
-    print("   Enter a folder path.  Examples:")
-    print("       Recordings            ->  .\\Output\\Recordings")
-    print("       G:\\Videos\\Output      ->  G:\\Videos\\Output")
-    blank()
-    print("   Leave blank to keep current.")
-    blank(6)
-    footer()
-    raw = input("   New output folder: ").strip()
-    if raw:
-        resolved = resolve_output_path(raw)
-        if resolved is None:
-            return config
-        try:
-            os.makedirs(resolved, exist_ok=True)
-            config["output_path"] = resolved
-            configure.save_configuration(config)
-        except OSError as e:
-            cls()
-            header("Configure Settings")
-            blank(10)
-            print(f"   ERROR: Could not create folder: {e}")
-            blank(10)
-            footer()
-            time.sleep(3)
-    return config
+                rec_start_btn.click(
+                    fn=on_start_recording,
+                    outputs=(
+                        [files_panel, rec_panel]
+                        + _rec_panel_outputs
+                        + [rec_start_btn, rec_pause_btn, rec_resume_btn, rec_stop_btn]
+                        + [rec_timer]
+                        + [rec_status]
+                    ),
+                )
 
+                def on_stop_recording():
+                    if not configure.is_recording:
+                        return [gr.update()] * 15
 
-# ---------------------------------------------------------------------------
-# System information screen
-# ---------------------------------------------------------------------------
-def system_info_screen():
-    cls()
-    header("System Information")
-    blank(3)
+                    stop_cb()
 
-    print(f"   Python   : {sys.version.split()[0]}")
-    blank(1)
+                    last = recorder.last_output_file
+                    segs = recorder.last_segment_count
+                    if last and os.path.exists(last):
+                        sz = utilities.fmt_bytes(os.path.getsize(last))
+                        if segs > 1:
+                            msg = (
+                                f"Done. {segs} segment(s).  "
+                                f"Last: {os.path.basename(last)} ({sz})"
+                            )
+                        else:
+                            msg = f"Saved: {os.path.basename(last)} ({sz})"
+                    else:
+                        msg = "Stopped. Check output folder."
 
-    # CPU info (populated by recorder at init time)
-    try:
-        ci = recorder.get_cpu_info()
-        print(f"   CPU      : {ci['name']}")
-        cores_str = f"{ci['logical_cores']} logical cores"
-        simd_parts = []
-        if ci.get("sse2"):    simd_parts.append("SSE2")
-        if ci.get("avx"):     simd_parts.append("AVX")
-        if ci.get("avx2"):    simd_parts.append("AVX2")
-        if ci.get("avx512f"): simd_parts.append("AVX-512F")
-        simd_str = ", ".join(simd_parts) if simd_parts else "none detected"
-        print(f"   Cores    : {cores_str}   SIMD: {simd_str}")
-        cap      = ci.get("thread_cap", recorder._thread_cap)
-        reserved = ci["logical_cores"] - cap
-        print(f"   Threads  : {cap} active core(s)  "
-              f"{reserved} reserved for OS / game")
-    except Exception:
-        print("   CPU      : detection unavailable")
-    blank(1)
+                    refreshed = configure.load_configuration()
+                    config.update(refreshed)
+                    rows, cnt, sz_str, fld = _build_file_table(config)
 
-    try:
-        import cv2
-        print(f"   OpenCV   : {cv2.__version__}")
-    except ImportError:
-        print("   OpenCV   : not installed")
-    blank(1)
-    try:
-        import mss as _mss
-        print("   mss      : available")
-    except ImportError:
-        print("   mss      : not installed")
-    blank(1)
-    try:
-        import imageio_ffmpeg
-        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-        print(f"   ffmpeg   : {ffmpeg_path}")
-    except Exception:
-        print("   ffmpeg   : not found")
-    blank(1)
-    print("   Encoding : MJPG intermediate -> libx264 via ffmpeg (75% thread budget)")
-    blank(1)
-    print(f"   Output   : {DEFAULT_OUTPUT}")
-    blank(1)
-    print("   Segments : pipelined – mux runs in background while next segment captures")
+                    return [
+                        gr.update(visible=True),    # files_panel
+                        gr.update(visible=False),   # rec_panel
+                        gr.update(value=rows),       # file_table
+                        gr.update(value=cnt),       # total_files
+                        gr.update(value=sz_str),    # total_size
+                        gr.update(value=fld),       # out_folder
+                    ] + list(_btn_idle()) + [
+                        gr.update(active=False),                       # timer
+                        gr.update(value=0, label="Segment: --"),       # seg_progress
+                        gr.update(value=" "),                           # seg_stack
+                        gr.update(value=" "),                           # encode_log
+                        msg,                                           # status
+                    ]
 
-    blank(3)
-    footer()
-    input("   Press ENTER to continue ... ")
+                rec_stop_btn.click(
+                    fn=on_stop_recording,
+                    outputs=[
+                        files_panel, rec_panel,
+                        file_table, total_files_box, total_size_box, out_folder_box,
+                        rec_start_btn, rec_pause_btn, rec_resume_btn, rec_stop_btn,
+                        rec_timer,
+                        seg_progress, seg_stack_box, encode_log,
+                        rec_status,
+                    ],
+                )
 
+                def on_pause_recording():
+                    """Pause: best-effort call to recorder, switch to paused UI."""
+                    if not configure.is_recording:
+                        return [gr.update()] * 5
+                    try:
+                        recorder.pause_capture()
+                    except AttributeError:
+                        pass   # recorder may not implement pause yet
+                    configure.is_paused = True
+                    return list(_btn_paused()) + ["Paused."]
 
-# ---------------------------------------------------------------------------
-# Blocking-message helpers (used by launcher for short notices)
-# ---------------------------------------------------------------------------
-def show_cannot_configure():
-    cls()
-    header()
-    blank(10)
-    print("   Cannot configure while recording is active.")
-    blank(10)
-    footer()
-    time.sleep(2)
+                rec_pause_btn.click(
+                    fn=on_pause_recording,
+                    outputs=[
+                        rec_start_btn, rec_pause_btn, rec_resume_btn, rec_stop_btn,
+                        rec_status,
+                    ],
+                )
 
+                def on_resume_recording():
+                    """Resume: best-effort call to recorder, switch to recording UI."""
+                    try:
+                        recorder.resume_capture()
+                    except AttributeError:
+                        pass
+                    configure.is_paused = False
+                    return list(_btn_recording()) + ["Recording..."]
 
-def show_cannot_purge():
-    cls()
-    header()
-    blank(10)
-    print("   Cannot purge while recording is active.")
-    blank(10)
-    footer()
-    time.sleep(2)
+                rec_resume_btn.click(
+                    fn=on_resume_recording,
+                    outputs=[
+                        rec_start_btn, rec_pause_btn, rec_resume_btn, rec_stop_btn,
+                        rec_status,
+                    ],
+                )
 
+                def on_purge():
+                    if configure.is_recording:
+                        return [gr.update()] * 4 + ["Cannot purge while recording."]
+                    out = config.get("output_path", utilities.DEFAULT_OUTPUT)
+                    deleted, total, errs = utilities.purge_recordings(out)
+                    if total == 0:
+                        msg = "No recordings to purge."
+                    else:
+                        msg = f"Purged {deleted}/{total} recording(s)."
+                        if errs:
+                            msg += f"  Errors: {len(errs)}"
+                    refreshed = configure.load_configuration()
+                    config.update(refreshed)
+                    rows, cnt, sz_str, fld = _build_file_table(config)
+                    return [
+                        gr.update(value=rows),
+                        gr.update(value=cnt),
+                        gr.update(value=sz_str),
+                        gr.update(value=fld),
+                        msg,
+                    ]
 
-def show_stopping_before_exit():
-    cls()
-    header()
-    blank(10)
-    print("   Stopping recording before exit ...")
-    blank(10)
-    footer()
+                rec_purge_btn.click(
+                    fn=on_purge,
+                    outputs=[
+                        file_table, total_files_box, total_size_box,
+                        out_folder_box, rec_status,
+                    ],
+                )
 
+                def on_timer_tick():
+                    if not configure.is_recording:
+                        return [gr.update()] * 10
 
-def show_goodbye():
-    cls()
-    header()
-    blank(11)
-    print("   Goodbye.")
-    blank(11)
-    footer()
-    time.sleep(1)
+                    rv = _build_rec_values(config)
+                    elapsed = 0
+                    if configure.recording_start_time:
+                        elapsed = time.time() - configure.recording_start_time
 
+                    return [
+                        gr.update(value=rv["status"]),
+                        gr.update(value=rv["elapsed"]),
+                        gr.update(value=rv["segment"]),
+                        gr.update(value=rv["resolution"]),
+                        gr.update(value=rv["fps"]),
+                        gr.update(value=rv["video_prof"]),
+                        gr.update(value=rv["audio_prof"]),
+                        gr.update(
+                            value=rv["seg_progress"],
+                            label=rv["seg_label"],
+                        ),
+                        gr.update(value=rv["stack_text"]),
+                        f"Recording...  [{utilities.fmt_time(elapsed)}]",
+                    ]
 
-def show_init_progress():
-    cls()
-    header()
-    blank(10)
-    print("   Initialising capture system ...")
-    blank(10)
-    footer()
+                rec_timer.tick(
+                    fn=on_timer_tick,
+                    outputs=[
+                        rec_status_box, rec_elapsed_box, rec_segment_box,
+                        rec_res_box, rec_fps_box, rec_vprof_box,
+                        rec_aprof_box,
+                        seg_progress, seg_stack_box,
+                        rec_status,
+                    ],
+                )
 
+                exit_rec.click(fn=lambda: exit_cb())
 
-def show_init_error():
-    cls()
-    header()
-    blank(8)
-    print("   ERROR: Capture system could not initialise.")
-    blank()
-    print("   Run option 2 (Install) in the batch menu, then try again.")
-    blank(8)
-    footer()
-    input("   Press ENTER to exit ... ")
+            # =======================================================================
+            # TAB 2 - CONFIGURE
+            # =======================================================================
+            with gr.Tab("Configure", id="tab_cfg"):
+
+                # ---- Row 1: Video  (Resolution | FPS | Video Compression)
+                gr.Markdown("Video", elem_classes=["cfg-section-label"])
+                with gr.Row():
+                    res = config["resolution"]
+                    res_val = f"{res['width']}x{res['height']}"
+                    res_choices = [
+                        f"{r['width']}x{r['height']}"
+                        for r in configure.resolutions
+                    ]
+                    cfg_resolution = gr.Dropdown(
+                        choices=res_choices,
+                        value=(
+                            res_val if res_val in res_choices
+                            else res_choices[0]
+                        ),
+                        label="Resolution",
+                    )
+                    cfg_fps = gr.Dropdown(
+                        choices=[str(f) for f in configure.fps_options],
+                        value=str(config.get("fps", 30)),
+                        label="FPS",
+                    )
+                    cfg_video_comp = gr.Dropdown(
+                        choices=configure.video_compression_options,
+                        value=config.get(
+                            "video_compression", "Optimal Performance"
+                        ),
+                        label="Video Compression",
+                    )
+
+                # ---- Row 2: Audio  (Audio Bitrate | Audio Compression)
+                gr.Markdown("Audio", elem_classes=["cfg-section-label"])
+                with gr.Row():
+                    cfg_audio_br = gr.Dropdown(
+                        choices=[
+                            f"{b} kbps"
+                            for b in configure.audio_bitrate_options
+                        ],
+                        value=f"{config.get('audio_bitrate', 192)} kbps",
+                        label="Audio Bitrate",
+                    )
+                    cfg_audio_comp = gr.Dropdown(
+                        choices=configure.audio_compression_options,
+                        value=config.get(
+                            "audio_compression", "Optimal Performance"
+                        ),
+                        label="Audio Compression",
+                    )
+
+                # ---- Row 3: Output  (Container | Output Dir)
+                gr.Markdown("Output", elem_classes=["cfg-section-label"])
+                with gr.Row():
+                    cfg_container = gr.Dropdown(
+                        choices=configure.container_format_options,
+                        value=config.get("container_format", "MKV"),
+                        label="Container Format",
+                    )
+                    cfg_output_dir = gr.Textbox(
+                        value=config.get("output_path", "Output"),
+                        label="Output Directory",
+                        scale=2,
+                    )
+
+                    cfg_splits = gr.Dropdown(
+                        choices=["Off", "On"],
+                        value=(
+                            "On" if config.get("video_splits", False)
+                            else "Off"
+                        ),
+                        label="1-Hour Video Splits",
+                    )
+
+                # ---- Row 4: Resources
+                #      (1Hr Splits | Max Threads | Max RAM)
+                gr.Markdown(
+                    "RESOURCES",
+                    elem_classes=["cfg-section-label"],
+                )
+                with gr.Row():
+                    cfg_threads = gr.Dropdown(
+                        choices=[
+                            f"{t}%" for t in configure.thread_budget_options
+                        ],
+                        value=f"{config.get('thread_budget', 75)}%",
+                        label="Max Threads Used",
+                    )
+                    cfg_ram = gr.Dropdown(
+                        choices=[
+                            f"{r}%" for r in configure.max_ram_usage_options
+                        ],
+                        value=f"{config.get('max_ram_usage', 50)}%",
+                        label="Max RAM Usage",
+                    )
+
+                # --- Status bar -------------------------------------------
+                with gr.Row():
+                    cfg_status = gr.Textbox(
+                        value="Configuration tab loaded.",
+                        label="Status",
+                        interactive=False,
+                        max_lines=1,
+                        scale=20,
+                        elem_classes=["status-bar"],
+                    )
+                    with gr.Column(scale=1, min_width=130):
+                        cfg_save_btn = gr.Button(
+                            "\U0001F4BE  Save Settings",
+                            variant="secondary",
+                            elem_classes=["save-btn"],
+                        )
+                        exit_cfg = gr.Button(
+                            "Exit Program",
+                            variant="secondary",
+                            elem_classes=["exit-btn"],
+                        )
+
+                # --- Configure callbacks ----------------------------------
+
+                def on_save_config(
+                    res_str, fps_str, v_comp, a_br_str, a_comp,
+                    container, out_dir, splits_str, threads_str, ram_str,
+                ):
+                    if configure.is_recording:
+                        return "Cannot change settings while recording."
+
+                    try:
+                        w, h = res_str.split("x")
+                        config["resolution"] = {
+                            "width": int(w), "height": int(h)
+                        }
+                    except (ValueError, AttributeError):
+                        pass
+
+                    try:
+                        config["fps"] = int(fps_str)
+                    except (ValueError, TypeError):
+                        pass
+
+                    if v_comp in configure.video_compression_options:
+                        config["video_compression"] = v_comp
+
+                    try:
+                        config["audio_bitrate"] = int(
+                            a_br_str.replace("kbps", "").strip()
+                        )
+                    except (ValueError, AttributeError):
+                        pass
+
+                    if a_comp in configure.audio_compression_options:
+                        config["audio_compression"] = a_comp
+
+                    if container in configure.container_format_options:
+                        config["container_format"] = container
+
+                    if out_dir and out_dir.strip():
+                        resolved = utilities.resolve_output_path(
+                            out_dir.strip()
+                        )
+                        if resolved:
+                            try:
+                                os.makedirs(resolved, exist_ok=True)
+                                config["output_path"] = resolved
+                            except OSError as e:
+                                return f"Error creating folder: {e}"
+
+                    config["video_splits"] = (splits_str == "On")
+
+                    try:
+                        config["thread_budget"] = int(
+                            threads_str.replace("%", "").strip()
+                        )
+                    except (ValueError, AttributeError):
+                        pass
+
+                    try:
+                        config["max_ram_usage"] = int(
+                            ram_str.replace("%", "").strip()
+                        )
+                    except (ValueError, AttributeError):
+                        pass
+
+                    configure.save_configuration(config)
+                    return "Configuration saved."
+
+                cfg_save_btn.click(
+                    fn=on_save_config,
+                    inputs=[
+                        cfg_resolution, cfg_fps, cfg_video_comp,
+                        cfg_audio_br, cfg_audio_comp,
+                        cfg_container, cfg_output_dir,
+                        cfg_splits, cfg_threads, cfg_ram,
+                    ],
+                    outputs=[cfg_status],
+                )
+
+                exit_cfg.click(fn=lambda: exit_cb())
+
+            # =======================================================================
+            # TAB 3 - ABOUT / DEBUG
+            # =======================================================================
+            with gr.Tab("About / Debug", id="tab_about"):
+
+                gr.Markdown(
+                    """
+### Desktop-264-Capture
+A x264vfw screen recording tool for Windows ~8.1-10 by [WiseMan-TimeLord](https://wisetime.rf.gd)
+- Here is the project on [GitHub](https://github.com/wiseman-timelord/Desktop-264-Capture).
+- Here are the [1.61 videos](https://www.youtube.com/playlist?list=PL7GSoMbwogC9FhbdfFyjXJcFDNSPFdg_U) created during testing.
+""",
+                    elem_classes=["about-header"],
+                )
+
+                # --- System / Debug info boxes ----------------------------
+                gr.Markdown("System Info", elem_classes=["cfg-section-label"])
+
+                sinfo = utilities.get_system_info()
+
+                with gr.Row():
+                    gr.Textbox(
+                        value=sinfo.get("python_version", "?"),
+                        label="Python Version",
+                        interactive=False,
+                        max_lines=1,
+                        elem_classes=["info-box"],
+                    )
+                    gr.Textbox(
+                        value=sinfo.get("opencv", "not installed"),
+                        label="OpenCV",
+                        interactive=False,
+                        max_lines=1,
+                        elem_classes=["info-box"],
+                    )
+                    gr.Textbox(
+                        value=sinfo.get("mss", "not installed"),
+                        label="MSS (DXGI)",
+                        interactive=False,
+                        max_lines=1,
+                        elem_classes=["info-box"],
+                    )
+
+                with gr.Row():
+                    gr.Textbox(
+                        value=sinfo.get("cpu_name", "?"),
+                        label="CPU",
+                        interactive=False,
+                        max_lines=1,
+                        elem_classes=["info-box"],
+                        scale=3,
+                    )
+                    gr.Textbox(
+                        value=f"{sinfo.get('thread_cap', '?')}/{sinfo.get('logical_cores', '?')}",
+                        label="Cores Used / Total",
+                        interactive=False,
+                        max_lines=1,
+                        elem_classes=["info-box"],
+                        scale=1,
+                    )
+                    gr.Textbox(
+                        value=sinfo.get("simd_flags", "none"),
+                        label="SIMD Flags",
+                        interactive=False,
+                        max_lines=1,
+                        elem_classes=["info-box"],
+                        scale=2,
+                    )
+
+                gr.Markdown("Pipeline", elem_classes=["cfg-section-label"])
+                with gr.Row():
+                    gr.Textbox(
+                        value=sinfo.get("encoding", "?"),
+                        label="Encoding Pipeline",
+                        interactive=False,
+                        max_lines=1,
+                        elem_classes=["info-box"],
+                        scale=2,
+                    )
+                    gr.Textbox(
+                        value=sinfo.get("segments", "?"),
+                        label="Segment Strategy",
+                        interactive=False,
+                        max_lines=1,
+                        elem_classes=["info-box"],
+                        scale=2,
+                    )
+                    gr.Textbox(
+                        value=sinfo.get("ffmpeg_status", "Missing"),
+                        label="FFmpeg Status",
+                        interactive=False,
+                        max_lines=1,
+                        elem_classes=["info-box"],
+                        scale=1,
+                    )
+
+                # --- About tab status / exit bar --------------------------
+                with gr.Row():
+                    about_status = gr.Textbox(
+                        value= "About / Debug tab loaded. ",
+                        label= "Status ",
+                        interactive=False,
+                        max_lines=1,
+                        scale=20,
+                        elem_classes=[ "status-bar "],
+                    )
+                    exit_about = gr.Button(
+                        "Exit Program ",
+                        variant= "secondary ",
+                        scale=1,
+                        elem_classes=[ "exit-btn "],
+                    )
+
+                exit_about.click(fn=lambda: exit_cb())
+
+    # =======================================================================
+    # Window [X] close hook  – fires exit_cb when the browser tab /
+    # webview window is closed via the native title-bar button.
+    # Uses a synchronous XHR so the shutdown runs before the page unloads.
+    # =======================================================================
+    _exit_js = """
+() => {
+    window.addEventListener('beforeunload', function(e) {
+        // Find and click the first visible Exit Program button
+        var btns = document.querySelectorAll('button');
+        for (var i = 0; i < btns.length; i++) {
+            if (btns[i].textContent.trim() === 'Exit Program') {
+                btns[i].click();
+                break;
+            }
+        }
+    });
+}
+"""
+    app.load(js=_exit_js)
+    return app

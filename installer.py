@@ -1,4 +1,4 @@
-# installer.py – Desktop-264-Capture  (Windows 8.1+ / Python 3.7-3.12)
+# installer.py - Desktop-264-Capture  (Windows 8.1+ / Python 3.7-3.12)
 # Installs all dependencies, creates folders & config.
 
 import json
@@ -14,12 +14,21 @@ import time
 # -------------------------------------------------------------------------------
 VENV_DIR = ".venv"
 
+# pywebview uses the system EdgeHTML / Chromium engine on Windows to render
+# the Gradio interface inside a native desktop window (no external browser).
+# pythonnet + clr_loader are pulled in automatically by pywebview on Windows
+# for .NET/EdgeHTML interop.  If EdgeHTML is unavailable (Win 8.1 without the
+# WebView2 runtime), pywebview falls back to MSHTML (IE11 engine).
+# The WebView2 runtime can be installed from:
+#   https://developer.microsoft.com/en-us/microsoft-edge/webview2/
 REQ_LIST = [
     "mss>=9.0.0",              # GPU-agnostic DXGI Desktop Duplication capture
     "opencv-python>=4.5.0",    # VideoWriter (MJPG intermediate frame capture)
     "numpy>=1.21.0",           # frame array handling
     "pyaudiowpatch>=0.2.12",   # WASAPI loopback - system audio capture
     "imageio-ffmpeg>=0.4.7",   # bundled ffmpeg binary - mux + libx264 encode
+    "gradio>=4.0.0",           # Web-based GUI framework
+    "pywebview>=5.0",          # Native window wrapping the Gradio web UI
 ]
 
 PY_VER_MIN = (3, 7)
@@ -176,7 +185,9 @@ def write_default_config():
         "audio_compression": "Optimal Performance",
         "audio_bitrate": 192,
         "container_format": "MKV",
+        "video_splits": False,
         "thread_budget": 75,
+        "max_ram_usage": 50,
     }
     with open(CFG_PATH, "w") as f:
         json.dump(cfg, f, indent=4)
@@ -190,6 +201,32 @@ def purge_data_dir():
     if os.path.isdir(DATA_DIR):
         shutil.rmtree(DATA_DIR)
         print(f"  Purged {DATA_DIR}\\")
+
+# -------------------------------------------------------------------------------
+# Post-install: check for WebView2 runtime
+# -------------------------------------------------------------------------------
+def check_webview2():
+    """
+    Check whether the Edge WebView2 runtime is installed.
+    pywebview on Windows 10+ uses it for Chromium-based rendering.
+    On Windows 8.1, it falls back to MSHTML (IE11 engine) automatically.
+    """
+    import winreg
+    paths = [
+        (winreg.HKEY_LOCAL_MACHINE,
+         r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients"
+         r"\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+        (winreg.HKEY_CURRENT_USER,
+         r"Software\Microsoft\EdgeUpdate\Clients"
+         r"\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+    ]
+    for root, subkey in paths:
+        try:
+            with winreg.OpenKey(root, subkey):
+                return True
+        except OSError:
+            continue
+    return False
 
 # -------------------------------------------------------------------------------
 # Summary
@@ -212,6 +249,18 @@ def verify_and_summary() -> bool:
         except subprocess.CalledProcessError:
             print(f"  x   {pkg}  NOT installed")
             all_ok = False
+
+    # WebView2 check
+    try:
+        wv2 = check_webview2()
+        if wv2:
+            print(f"  ok  WebView2 runtime (Chromium renderer)")
+        else:
+            print(f"  !   WebView2 runtime not found (will use IE11 fallback)")
+            print(f"      For best experience, install from:")
+            print(f"      https://developer.microsoft.com/en-us/microsoft-edge/webview2/")
+    except Exception:
+        print(f"  ?   WebView2 runtime check skipped (non-Windows or registry error)")
 
     if all_ok:
         print("\n  All components installed successfully.")
