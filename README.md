@@ -105,6 +105,33 @@ Press ENTER to stop recording ...
 
 ### Output
 <details>
+<summary>The startup/initialization of main program (debug mode)...</summary>
+
+```
+   ===============================================================================
+      Desktop-264-Capture: Launching (Debug Mode)...
+   ===============================================================================
+   
+      Console will remain open to show logs.
+      Close the App Window to return to this menu.
+   
+   Desktop-264-Capture: Initialising (Debug Mode) ...
+   Capture system initialised  (mss + ffmpeg libx264 pipe + RAM buffer).
+     CPU          : AMD Ryzen 9 3900X 12-Core Processor
+     Logical CPUs : 24   SIMD: SSE2
+     Thread cap   : 18 core(s)  (75% budget)
+     Free RAM     : 52.7 GB   Video buffer cap: 16.0 GB  (75% of free, max 16 GB)
+     Audio chunk  : 8192 frames
+   Gradio server starting at http://127.0.0.1:7860 ...
+   * Running on local URL:  http://127.0.0.1:7860
+   * To create a public link, set `share=True` in `launch()`.
+
+```
+</details>
+
+
+
+<details>
 <summary>The installer for purge install...(ALPHA)</summary>
   
   ```
