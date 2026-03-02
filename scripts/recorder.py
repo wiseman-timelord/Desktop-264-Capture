@@ -821,6 +821,29 @@ def _capture_segment(config: dict, segment_num: int,
         current_temp_video = None
         return None
 
+    # ---- stderr drainer thread --------------------------------------------
+    # CRITICAL: ffmpeg writes progress stats to stderr continuously.
+    # If stderr is piped but never read, the 64 KB OS pipe buffer fills and
+    # ffmpeg blocks trying to write more output.  wait() then waits for ffmpeg
+    # to exit, ffmpeg never exits → deadlock → 120 s timeout → killed process.
+    # This thread drains stderr into a list so it is always available for
+    # error reporting without ever blocking ffmpeg.
+    _stderr_buf: list[bytes] = []
+
+    def _stderr_drainer():
+        try:
+            while True:
+                chunk = ffmpeg_proc.stderr.read(4096)
+                if not chunk:
+                    break
+                _stderr_buf.append(chunk)
+        except OSError:
+            pass
+
+    stderr_thread = threading.Thread(target=_stderr_drainer, daemon=True,
+                                     name=f"stderr-s{segment_num}")
+    stderr_thread.start()
+
     # ---- stdout reader thread ---------------------------------------------
     # Reads encoded H.264 bytes from ffmpeg's stdout into the video_buf.
     # Must run concurrently with the grab loop; if this thread stalls,
@@ -925,15 +948,16 @@ def _capture_segment(config: dict, segment_num: int,
     # stdout_reader exits when stdout closes (which happens after ffmpeg exits)
     stdout_thread.join(timeout=30)
 
+    # stderr_drainer should already be done since ffmpeg has exited; short join.
+    stderr_thread.join(timeout=10)
+
     if frames_dropped:
         print(f"  Warning: {frames_dropped} frame(s) dropped "
               f"(pipe queue full – encoder may need faster preset or lower thread cap)")
     if ret != 0:
-        stderr_text = ffmpeg_proc.stderr.read().decode(errors="replace")
+        stderr_text = b"".join(_stderr_buf).decode(errors="replace")
         print(f"  WARNING: ffmpeg exited with code {ret} for segment {segment_num}.")
         print(stderr_text[-2000:])
-    else:
-        ffmpeg_proc.stderr.read()   # drain to avoid zombie pipe
 
     if video_buf.spilled:
         print(f"  Note: segment {segment_num} spilled to disk "
@@ -1016,6 +1040,14 @@ def _capture_loop(config: dict):
             else:
                 break
 
+    # _capture_loop owns the executor it created; shut it down here so that
+    # stop_capture() cannot race executor.submit() by shutting the executor
+    # down from a different thread while this loop might still be submitting.
+    # shutdown(wait=False) means "stop accepting new futures but let any
+    # already-submitted futures run to completion."
+    executor.shutdown(wait=False)
+    _mux_executor = None
+
     current_segment_num = 1
 
 
@@ -1058,8 +1090,16 @@ def start_capture(config: dict):
 
 def stop_capture():
     """
-    Signal the capture loop to stop, then wait for background mux jobs.
-    Mux jobs complete in seconds (stream copy + AAC); the wait is brief.
+    Signal the capture loop to stop, then wait for all work to complete.
+
+    Sequence:
+      1. Set is_capturing = False  -> grab loop exits on next iteration.
+      2. Join capture thread (up to 60 s).  With the stderr drainer fix the
+         ffmpeg flush is near-instant; 60 s is a generous safety margin.
+         The executor is shut down by _capture_loop itself when it exits,
+         so there is no race between this join and executor.submit().
+      3. Wait for any already-submitted mux futures.  These are fast
+         (stream copy + AAC); they may already be done by the time we get here.
     """
     global is_capturing, capture_thread, _mux_executor
 
@@ -1069,11 +1109,16 @@ def stop_capture():
 
     is_capturing = False
 
+    # Wait for the capture thread to finish.  It exits once the grab loop
+    # stops, ffmpeg flushes (fast with stderr drainer), and _capture_loop
+    # shuts down the executor.  60 s covers any edge-case encoder flush.
     if capture_thread and capture_thread.is_alive():
-        capture_thread.join(timeout=15)
+        capture_thread.join(timeout=60)
 
     capture_thread = None
 
+    # Wait for any in-flight mux futures.  The executor is already shut down
+    # (or being shut down) by _capture_loop; we just need the results.
     futures_to_wait = list(_mux_futures)
     if futures_to_wait:
         remaining = sum(1 for f in futures_to_wait if not f.done())
@@ -1085,6 +1130,8 @@ def stop_capture():
             except Exception as e:
                 print(f"  Mux error: {e}")
 
+    # Executor is owned and shut down by _capture_loop.  If for any reason
+    # it was not cleaned up there (e.g. fatal exception in the loop), do it now.
     if _mux_executor is not None:
         _mux_executor.shutdown(wait=False)
         _mux_executor = None
