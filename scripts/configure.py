@@ -10,6 +10,7 @@ import sys
 # ---------------------------------------------------------------------------
 is_recording         = False
 is_paused            = False
+is_stopping          = False   # True while mux is draining after Stop is clicked
 recording_start_time = None
 
 # ---------------------------------------------------------------------------

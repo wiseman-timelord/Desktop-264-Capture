@@ -311,7 +311,7 @@ def _build_rec_values(config: dict) -> dict:
     res = config["resolution"]
     ab  = configure.effective_audio_bitrate(config)
 
-    d["status"]     = "● RECORDING"
+    d["status"]     = "⏸ PAUSED" if configure.is_paused else "● RECORDING"
     d["resolution"] = f"{res['width']}x{res['height']}"
     d["fps"]        = str(config["fps"])
     # Audio Profile shows bitrate only
@@ -624,10 +624,85 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                 )
 
                 def on_stop_recording():
-                    if not configure.is_recording:
-                        return [gr.update()] * 13
+                    """
+                    Generator callback so the UI stays responsive while the mux drains.
 
-                    stop_cb()
+                    Phase 1 (immediate): flip configure flags, hide buttons, show
+                              "Encoding..." in the rec_panel.  Timer keeps ticking
+                              (is_stopping=True branch) to show live mux progress.
+                    Phase 2 (background thread + polling): run stop_cb() – which
+                              calls recorder.stop_capture() and waits for all mux
+                              futures – in a daemon thread.  Yield no-op updates
+                              every 0.5 s so the browser connection stays alive.
+                    Phase 3 (done): hide rec_panel, show files_panel with a fresh
+                              file listing and an idle button bar.
+                    """
+                    if not configure.is_recording and not recorder.is_capturing:
+                        yield [gr.update()] * 14
+                        return
+
+                    # --- Phase 1: immediate UI response ----------------------
+                    configure.is_recording         = False
+                    configure.recording_start_time = None
+                    configure.is_paused            = False
+                    configure.is_stopping          = True
+
+                    yield [
+                        gr.update(),                             # files_panel hidden
+                        gr.update(),                             # rec_panel visible
+                        gr.update(), gr.update(),                # file_table, total_files
+                        gr.update(), gr.update(),                # total_size, out_folder
+                        gr.update(visible=False),                # start_btn
+                        gr.update(visible=False),                # pause_btn
+                        gr.update(visible=False),                # resume_btn
+                        gr.update(visible=False),                # stop_btn
+                        gr.update(active=True),                  # keep timer ON (mux display)
+                        gr.update(value=0, label="Encoding..."), # seg_progress
+                        gr.update(                               # encode_log
+                            value="[MUX] Encoding segment(s)... please wait. "
+                        ),
+                        "Encoding...",                           # rec_status
+                    ]
+
+                    # --- Phase 2: background stop + live polling --------------
+                    _done = threading.Event()
+
+                    def _run_stop():
+                        stop_cb()      # blocks until capture thread exits + mux drains
+                        _done.set()
+
+                    threading.Thread(
+                        target=_run_stop, daemon=True, name="stop-capture"
+                    ).start()
+
+                    while not _done.is_set():
+                        time.sleep(0.5)
+                        mux_n = recorder.pending_mux_count
+                        if mux_n > 0:
+                            log = (
+                                f"[MUX] {mux_n} segment(s) encoding "
+                                f"(stream-copy + AAC)... "
+                            )
+                            bar_label = f"Encoding {mux_n} segment(s)..."
+                            status    = f"Encoding...  ({mux_n} segment(s) remaining)"
+                        else:
+                            log       = "[MUX] Finalising... "
+                            bar_label = "Finalising..."
+                            status    = "Finalising..."
+                        yield [
+                            gr.update(), gr.update(),
+                            gr.update(), gr.update(),
+                            gr.update(), gr.update(),
+                            gr.update(visible=False), gr.update(visible=False),
+                            gr.update(visible=False), gr.update(visible=False),
+                            gr.update(active=True),
+                            gr.update(value=0, label=bar_label),
+                            gr.update(value=log),
+                            status,
+                        ]
+
+                    # --- Phase 3: encoding done – show file list -------------
+                    configure.is_stopping = False
 
                     last = recorder.last_output_file
                     segs = recorder.last_segment_count
@@ -647,18 +722,18 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                     config.update(refreshed)
                     rows, cnt, sz_str, fld = _build_file_table(config)
 
-                    return [
-                        gr.update(visible=True),    # files_panel
-                        gr.update(visible=False),   # rec_panel
-                        gr.update(value=rows),        # file_table
-                        gr.update(value=cnt),       # total_files
-                        gr.update(value=sz_str),    # total_size
-                        gr.update(value=fld),       # out_folder
+                    yield [
+                        gr.update(visible=True),                      # files_panel
+                        gr.update(visible=False),                     # rec_panel
+                        gr.update(value=rows),                        # file_table
+                        gr.update(value=cnt),                         # total_files
+                        gr.update(value=sz_str),                      # total_size
+                        gr.update(value=fld),                         # out_folder
                     ] + list(_btn_idle()) + [
-                        gr.update(active=False),                       # timer
-                        gr.update(value=0, label="Segment Progress"),  # seg_progress
-                        gr.update(value="  "),                           # encode_log
-                        msg,                                           # status
+                        gr.update(active=False),                      # timer OFF
+                        gr.update(value=0, label="Segment Progress"), # seg_progress
+                        gr.update(value="  "),                        # encode_log
+                        msg,                                          # rec_status
                     ]
 
                 rec_stop_btn.click(
@@ -740,13 +815,37 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                 )
 
                 def on_timer_tick():
+                    # Mux-draining phase: recording stopped but encoder still running
+                    if configure.is_stopping:
+                        mux_n = recorder.pending_mux_count
+                        if mux_n > 0:
+                            log = (
+                                f"[MUX] {mux_n} segment(s) encoding "
+                                f"(stream-copy + AAC)... "
+                            )
+                        else:
+                            log = "[MUX] Finalising... "
+                        return [
+                            gr.update(value="⏳ ENCODING"),
+                            gr.update(),
+                            gr.update(), gr.update(), gr.update(),
+                            gr.update(value=0, label="Encoding..."),
+                            gr.update(value=log),
+                            "Encoding...",
+                        ]
+
                     if not configure.is_recording:
-                        return [gr.update()] * 7
+                        return [gr.update()] * 8
 
                     rv = _build_rec_values(config)
                     elapsed = 0
                     if configure.recording_start_time:
                         elapsed = time.time() - configure.recording_start_time
+
+                    if configure.is_paused:
+                        status_text = f"Paused.  [{utilities.fmt_time(elapsed)}] "
+                    else:
+                        status_text = f"Recording...  [{utilities.fmt_time(elapsed)}] "
 
                     return [
                         gr.update(value=rv["status"]),
@@ -759,7 +858,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                             label=rv["seg_label"],
                         ),
                         gr.update(value=rv["encode_log"]),
-                        f"Recording...  [{utilities.fmt_time(elapsed)}] ",
+                        status_text,
                     ]
 
                 rec_timer.tick(
