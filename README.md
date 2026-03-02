@@ -222,6 +222,35 @@ Press ENTER to stop recording ...
   ```
 </details>
 
+### Requirements
+- Windows 8.1-10 - PClaude Sonnet assessed compatibility ranges, testing on Windows 10.
+- Python 3.7-3.12 - Claude Sonnet assessed compatibility ranges, testing on v3.12.x 
+
+### Instructions
+1. Run the batch, right click and run as admin.
+2. Select install, do clean install, and enable python through firewall if you havent already. After result summary you will be returned to menu.
+3. BAck on the menu, select 1 to load the program.
+4. In the main program, configure the options including output folder and resolution, etc, then return to main menu and select 1 to start recording, and when you are finished press enter until you return to the menu.
+5. Repeat recording as required, and when you are finished, then exit the program with X on main menu.
+- After moving/renaming the program folder, I noticed it was portable, as it did not require reinstall to work correctly in new path.
+
+### Structure
+The plan for the file structure...
+```
+.\Desktop-264-Capture.bat  (this script is not being edited in this session, but it runs the installer/launcher)
+.\installer.py   (install libraries/packages in, `.venv` and `.\data`, as well as create Json)
+.\launcher.py    (run main program, main loop, startup/shutdown functions)
+.\scripts\* (scripts for program entered through launcher).
+.\scripts\displays.py    (interfaces, displays, browser, related functions)
+.\scripts\configure.py   (globals/maps/lists, save/load json)
+.\scripts\recorder.py   (codec/encoder/recording handling)
+.\scripts\utilities.py   (maintenance, system/utility functions)
+.\data\persistent.json   (persistent settings)
+```
+
+### Development
+Project restart with Claude Sonnet...
+- Doing testing/bugfixing/improvement since v0.3, in the creation of 4 hour RimWorld videos. There have been some optimizations to, speed up saving and enable seamless segmented recording transitions. 
 <details>
 <summary>Grok Encoding Research Notes (somewhat corrupted)...</summary>
    
@@ -276,37 +305,6 @@ Press ENTER to stop recording ...
 
   ```
 </details>
-
-### Requirements
-- Windows 8.1-10 - PClaude Sonnet assessed compatibility ranges, testing on Windows 10.
-- Python 3.7-3.12 - Claude Sonnet assessed compatibility ranges, testing on v3.12.x 
-
-### Instructions
-1. Run the batch, right click and run as admin.
-2. Select install, do clean install, and enable python through firewall if you havent already. After result summary you will be returned to menu.
-3. BAck on the menu, select 1 to load the program.
-4. In the main program, configure the options including output folder and resolution, etc, then return to main menu and select 1 to start recording, and when you are finished press enter until you return to the menu.
-5. Repeat recording as required, and when you are finished, then exit the program with X on main menu.
-- After moving/renaming the program folder, I noticed it was portable, as it did not require reinstall to work correctly in new path.
-
-### Structure
-The plan for the file structure...
-```
-.\Desktop-264-Capture.bat  (this script is not being edited in this session, but it runs the installer/launcher)
-.\installer.py   (install libraries/packages in, `.venv` and `.\data`, as well as create Json)
-.\launcher.py    (run main program, main loop, startup/shutdown functions)
-.\scripts\* (scripts for program entered through launcher).
-.\scripts\displays.py    (interfaces, displays, browser, related functions)
-.\scripts\configure.py   (globals/maps/lists, save/load json)
-.\scripts\recorder.py   (codec/encoder/recording handling)
-.\scripts\utilities.py   (maintenance, system/utility functions)
-.\data\persistent.json   (persistent settings)
-```
-
-### Development
-Project restart with Claude Sonnet...
-- Doing testing/bugfixing/improvement since v0.3, in the creation of 4 hour RimWorld videos. There have been some optimizations to, speed up saving and enable seamless segmented recording transitions. 
-
 ### Credits
 - mss / python-mss - Ultra-fast cross-platform screen-capture library using DXGI Desktop Duplication on Windows.
 - OpenCV / opencv-python - Computer vision library used here for writing raw screen frames into an MJPG intermediate video file via VideoWriter.
