@@ -5,103 +5,17 @@ Statue: Beta - Project resume was a success, program has been tested and is full
 x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~3.12.x. Batch launched with menu for, install or run. No GUI, intended to be used on secondary display, while recording primary display. Intended to have quality/optimal/HighCompression options for audio/video, having researched parameters behind simplified configuration. One would use this program for recording, gaming or application demonstration, etc, where one would want to be recording the primary display, and then editing later on the users own choice of video editor that supports, mp4 or mkv, file formats, and then after saving the final movie, when it is time to move on to creating a next video, one would be purging the raw recordings, in order to keep things tidy. 
 
 ### Media
-- Main menu, showing recorded 4 Hour video in 1 Hour segments, sizes "1080P" with quality at "Optimal"...(v0.4)
-```
-===============================================================================
-   Desktop-264-Capture
-===============================================================================
+- The Dynamic Recording page, where we manage our files and commence recording...(v1.02)
 
- Videos Folder:
-     G:\Videos\Output
+![recording_page](https://raw.githubusercontent.com/wiseman-timelord/Desktop-264-Capture/refs/heads/main/media/recording_page.jpg)
 
- Recent Files:
-    Desktop_Video_2026_03_01_S004.mp4  (1.05 GB)
-    Desktop_Video_2026_03_01_S003.mp4  (1.58 GB)
-    Desktop_Video_2026_03_01_S002.mp4  (1.42 GB)
-    Desktop_Video_2026_03_01_S001.mp4  (1.49 GB)
-    (empty)
+- The Configure page, showing the detailed options available for recording...(v1.02)
 
+![recording_page](https://raw.githubusercontent.com/wiseman-timelord/Desktop-264-Capture/refs/heads/main/media/configure_page.jpg)
 
--------------------------------------------------------------------------------
+- The About/Debug page, with some relevant information, and variables for debug...(v1.02)
 
-   1) Start Recording
-
-   2) Configure Settings
-
-   3) System Information
-
-   4) Purge Recordings
-
-
--------------------------------------------------------------------------------
-Selection; Menu Options = 1-4, Quit = Q:
-
-```
-- The display while recording before secmentation...(v0.2)
-```
-===============================================================================
-   Desktop-264-Capture : Recording
-===============================================================================
-
-
-
-
-
-
-
-   Status        : RECORDING  [00:00:10]
-
-   Resolution    : 1280x720
-   FPS Target    : 30
-   Video Profile : Optimal Performance
-   Audio Profile : Optimal Performance  (160 kbps)
-
-   Temp Size     : 22.8 MB
-   Output Dir    : G:\Videos\Output
-
-
-
-
-
-
-
--------------------------------------------------------------------------------
-Press ENTER to stop recording ...
-
-
-```
-- Options Menu, now with 8 options...(v0.4.2)
-```
-==============================================================================
-   Desktop-264-Capture : Configure Settings
-===============================================================================
-
-
-
-   1) Resolution         : 1920x1080   (cycles: 1080p / 720p / 480p)
-
-   2) FPS                : 30   (cycles: 30 / 45 / 60)
-
-   3) Video Compression  : Optimal Performance
-
-   4) Audio Bitrate      : 160 kbps   (cycles: 96 / 128 / 160 / 192 / 256)
-
-   5) Audio Compression  : Optimal Performance
-
-   6) Output Directory   : G:\Videos\Output
-
-   7) Container Format   : MP4   (cycles: MKV / MP4)
-
-   8) 1Hr Video Splits   : True   (Save in 1Hr Segments)
-
-   9) Max Threads Used   : 75%   (cycles: 25% / 50% / 75%)
-
-
-
--------------------------------------------------------------------------------
-   Selection; Options = 1-9, Back = B:
-
-```
+![recording_page](https://raw.githubusercontent.com/wiseman-timelord/Desktop-264-Capture/refs/heads/main/media/about_debug_page.jpg)
 
 ### Output
 <details>
