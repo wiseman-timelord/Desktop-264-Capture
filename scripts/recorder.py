@@ -397,9 +397,9 @@ def current_segment_elapsed() -> float:
 # ===========================================================================
 # Initialisation
 # ===========================================================================
-def init_capture_system() -> bool:
+def init_capture_system(config: dict | None = None) -> bool:
     """Verify all runtime deps, choose buffer sizes, open PyAudio. Returns True on success."""
-    global _pa, AUDIO_CHUNK
+    global _pa, AUDIO_CHUNK, _thread_cap
 
     missing = []
     for mod in ("cv2", "mss", "numpy", "pyaudiowpatch", "imageio_ffmpeg"):
@@ -412,6 +412,13 @@ def init_capture_system() -> bool:
         print(f"ERROR: missing packages: {', '.join(missing)}")
         print("       Please run the installer (option 2 in the batch menu).")
         return False
+
+    # Apply thread budget from config so the correct value is used from the start
+    # (start_capture() will re-apply it again when recording begins, which is fine).
+    if config is not None:
+        budget_pct  = config.get("thread_budget", _THREAD_BUDGET_DEFAULT)
+        logical     = os.cpu_count() or 2
+        _thread_cap = max(1, int(logical * budget_pct / 100))
 
     AUDIO_CHUNK = _detect_audio_chunk()
     cv2.setNumThreads(_thread_cap)
@@ -426,15 +433,17 @@ def init_capture_system() -> bool:
     if ci["avx512f"]: simd.append("AVX-512F")
     simd_str = ", ".join(simd) if simd else "none detected"
 
-    ram_gb    = _get_available_ram_gb()
-    buf_limit = _calc_buffer_limit(None)
+    ram_gb      = _get_available_ram_gb()
+    buf_limit   = _calc_buffer_limit(config)
+    ram_pct     = config.get("max_ram_usage", int(_RAM_BUFFER_FRACTION * 100)) \
+                  if config is not None else int(_RAM_BUFFER_FRACTION * 100)
     print(f"Capture system initialised  (mss + ffmpeg libx264 pipe + RAM buffer).")
     print(f"  CPU          : {ci['name']}")
     print(f"  Logical CPUs : {ci['logical_cores']}   SIMD: {simd_str}")
-    print(f"  Thread cap   : {_thread_cap} core(s) (fallback – updated at recording start)")
+    print(f"  Thread cap   : {_thread_cap} core(s)  ({config.get('thread_budget', _THREAD_BUDGET_DEFAULT)}% budget)")
     print(f"  Free RAM     : {ram_gb:.1f} GB   "
           f"Video buffer cap: {buf_limit / (1024**3):.1f} GB  "
-          f"(50% of free, max {_RAM_BUFFER_HARD_CAP_GB:.0f} GB)")
+          f"({ram_pct}% of free, max {_RAM_BUFFER_HARD_CAP_GB:.0f} GB)")
     print(f"  Audio chunk  : {AUDIO_CHUNK} frames")
     return True
 

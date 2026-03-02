@@ -2,6 +2,8 @@
 # Gradio-based GUI for Desktop-264-Capture.
 # Two tabs: Recording (file table / live monitor) and Configure (grouped rows).
 # Dark grey theme throughout.  Status bar + Exit button on every tab.
+
+# Imports...
 import os
 import threading
 import time
@@ -153,15 +155,6 @@ CUSTOM_CSS = """
     font-size: 0.72rem !important;
     text-transform: uppercase !important;
 }
-/* ---- Segment stack box ---- */
-.seg-stack textarea {
-    background: #1a1a1a !important;
-    color: #8c8 !important;
-    border: 1px solid #383838 !important;
-    font-family: Consolas, monospace !important;
-    font-size: 0.8rem !important;
-    line-height: 1.5 !important;
-}
 /* ---- Encode log ---- */
 .encode-log textarea {
     background: #1a1a1a !important;
@@ -271,12 +264,11 @@ def _build_file_table(config: dict):
     """
     out_path = config.get("output_path", utilities.DEFAULT_OUTPUT)
     videos   = utilities.list_videos(out_path)
-
     folder_str = utilities.display_path(out_path)
-    empty_row  = [" ", " ", " "]
+    empty_row  = ["  ", "  ", "  "]
 
     if not videos:
-        rows = [["  - empty -", " ", " "]] + [empty_row] * (_MIN_TABLE_ROWS - 1)
+        rows = [["  - empty -", "  ", "  "]] + [empty_row] * (_MIN_TABLE_ROWS - 1)
         return rows, "0", "0 B", folder_str
 
     data_rows  = [[v["name"], v["size_str"], v["date"]] for v in videos]
@@ -297,18 +289,15 @@ def _build_file_table(config: dict):
 def _build_rec_values(config: dict) -> dict:
     """Return a dict of all recording display values for the GUI boxes."""
     d = {
-        "status":        "IDLE",
-        "elapsed":       "00:00:00",
-        "resolution":    "--",
-        "fps":           "--",
-        "video_prof":    "--",
-        "audio_prof":    "--",
-        "segment":       "--",
+        "status":         "IDLE",
+        "resolution":     "--",
+        "fps":            "--",
+        "audio_prof":     "--",
+        "segment":        "--",
         "seg_progress":  0.0,
-        "seg_label":     "Segment: --",
-        "output_dir":    config.get("output_path", "Output"),
-        "stack_text":    " ",
-        "encode_log":    " ",
+        "seg_label":      "Segment: --",
+        "output_dir":     config.get("output_path", "Output"),
+        "encode_log":     "  ",
     }
     if not configure.is_recording or configure.recording_start_time is None:
         return d
@@ -323,44 +312,33 @@ def _build_rec_values(config: dict) -> dict:
     ab  = configure.effective_audio_bitrate(config)
 
     d["status"]     = "● RECORDING"
-    d["elapsed"]    = utilities.fmt_time(elapsed)
     d["resolution"] = f"{res['width']}x{res['height']}"
     d["fps"]        = str(config["fps"])
-    d["video_prof"] = config.get("video_compression", "Optimal Performance")
-    d["audio_prof"] = f"{config.get('audio_compression', 'Optimal Performance')}  ({ab} kbps)"
-    d["output_dir"] = config.get("output_path", "Output")
+    # Audio Profile shows bitrate only
+    d["audio_prof"] = f"{ab} kbps"
+    d["output_dir"] = utilities.display_path(config.get("output_path", "Output"))
 
     # Segment progress
     if splits_on and split_dur > 0:
         seg_pct = min(seg_elapsed / split_dur, 1.0)
         d["segment"] = (
-            f"S{seg_num:03d}    "
-            f"[{utilities.fmt_time(seg_elapsed)} / {utilities.fmt_time(split_dur)}]"
+            f"S{seg_num:03d}     "
+            f"[{utilities.fmt_time(seg_elapsed)} / {utilities.fmt_time(split_dur)}] "
         )
     else:
         seg_pct = min(seg_elapsed / 3600.0, 1.0)
-        d["segment"] = f"S{seg_num:03d}   [{utilities.fmt_time(seg_elapsed)}]"
+        d["segment"] = f"S{seg_num:03d}   [{utilities.fmt_time(seg_elapsed)}] "
     d["seg_progress"] = seg_pct
     d["seg_label"]    = f"Segment {seg_num}:  {seg_pct * 100:.0f}%"
 
-    # Stack text
-    saved       = recorder.last_segment_count
-    mux_pending = recorder.pending_mux_count
-    stack = []
-    if saved > 0:
-        stack.append(f"  \u2714  Saved to disk     {saved} file(s)")
-    if mux_pending > 0:
-        stack.append(f"  \u27F3  Encoding (BG)     {mux_pending} segment(s)")
-    stack.append(f"  \u25CF  Recording now     S{seg_num:03d}")
-    d["stack_text"] = "\n".join(stack)
-
     # Encode log
     log = []
+    mux_pending = recorder.pending_mux_count
     if mux_pending > 0:
-        log.append(f"[MUX] {mux_pending} segment(s) encoding  (stream-copy + AAC)...")
+        log.append(f"[MUX] {mux_pending} segment(s) encoding  (stream-copy + AAC)... ")
     last = recorder.last_output_file
     if last:
-        log.append(f"[DONE] {os.path.basename(last)}")
+        log.append(f"[DONE] {os.path.basename(last)} ")
     d["encode_log"] = "\n".join(log)
 
     return d
@@ -378,7 +356,6 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
     stop_cb    : callable()  - stop recording
     exit_cb    : callable()  - shut down the application
     """
-
     with gr.Blocks(
         title="Desktop-264-Capture",
     ) as app:
@@ -394,7 +371,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                 init_rows, init_count, init_size, init_folder = \
                     _build_file_table(config)
 
-                # --- Files panel   (visible when NOT recording) -------------
+                # --- Files panel    (visible when NOT recording) -------------
                 with gr.Column(visible=True) as files_panel:
 
                     # Output folder box
@@ -443,7 +420,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                 # --- Recording panel  (visible WHILE recording) ------------
                 with gr.Column(visible=False) as rec_panel:
 
-                    # Top info boxes: Status | Elapsed | Segment
+                    # Row 1: Status | Output Dir (Segment removed, Output Dir moved up)
                     with gr.Row():
                         rec_status_box = gr.Textbox(
                             value="IDLE",
@@ -453,24 +430,16 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                             elem_classes=["rec-info-box"],
                             scale=2,
                         )
-                        rec_elapsed_box = gr.Textbox(
-                            value="00:00:00",
-                            label="Elapsed",
-                            interactive=False,
-                            max_lines=1,
-                            elem_classes=["rec-info-box"],
-                            scale=2,
-                        )
-                        rec_segment_box = gr.Textbox(
+                        rec_outdir_box = gr.Textbox(
                             value="--",
-                            label="Segment",
+                            label="Output Dir",
                             interactive=False,
                             max_lines=1,
                             elem_classes=["rec-info-box"],
                             scale=3,
                         )
 
-                    # Settings boxes: Resolution | FPS | Video Profile
+                    # Row 2: Resolution | FPS | Audio Profile (Video Profile removed)
                     with gr.Row():
                         rec_res_box = gr.Textbox(
                             value="--",
@@ -486,55 +455,26 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                             max_lines=1,
                             elem_classes=["rec-info-box"],
                         )
-                        rec_vprof_box = gr.Textbox(
-                            value="--",
-                            label="Video Profile",
-                            interactive=False,
-                            max_lines=1,
-                            elem_classes=["rec-info-box"],
-                        )
-
-                    # Audio Profile | Output Dir
-                    with gr.Row():
                         rec_aprof_box = gr.Textbox(
                             value="--",
                             label="Audio Profile",
                             interactive=False,
                             max_lines=1,
                             elem_classes=["rec-info-box"],
-                            scale=2,
-                        )
-                        rec_outdir_box = gr.Textbox(
-                            value="--",
-                            label="Output Dir",
-                            interactive=False,
-                            max_lines=1,
-                            elem_classes=["rec-info-box"],
-                            scale=3,
                         )
 
-                    # Segment progress bar
+                    # Row 3: Segment progress bar
                     seg_progress = gr.Slider(
                         minimum=0,
                         maximum=1,
                         value=0,
-                        label="Segment: --",
+                        label="Segment Progress",
                         interactive=False,
                     )
 
-                    # Segment stack
-                    seg_stack_box = gr.Textbox(
-                        value=" ",
-                        label="Segments",
-                        lines=1,
-                        max_lines=20,
-                        interactive=False,
-                        elem_classes=["seg-stack"],
-                    )
-
-                    # Encode log
+                    # Row 4: Encode log
                     encode_log = gr.Textbox(
-                        value=" ",
+                        value="  ",
                         label="Encode Log",
                         lines=2,
                         max_lines=3,
@@ -602,26 +542,22 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                 # ----------------------------------------------------------
 
                 # All recording-panel output components in canonical order:
+                # (7 components total now)
                 _rec_panel_outputs = [
-                    rec_status_box, rec_elapsed_box, rec_segment_box,
-                    rec_res_box, rec_fps_box, rec_vprof_box,
-                    rec_aprof_box, rec_outdir_box,
-                    seg_progress, seg_stack_box, encode_log,
+                    rec_status_box, rec_outdir_box,
+                    rec_res_box, rec_fps_box, rec_aprof_box,
+                    seg_progress, encode_log,
                 ]
 
                 def _apply_rec_values(rv: dict) -> list:
                     """Map a rec-values dict to gr.update() list for the panel."""
                     return [
                         gr.update(value=rv["status"]),
-                        gr.update(value=rv["elapsed"]),
-                        gr.update(value=rv["segment"]),
+                        gr.update(value=rv["output_dir"]),
                         gr.update(value=rv["resolution"]),
                         gr.update(value=rv["fps"]),
-                        gr.update(value=rv["video_prof"]),
                         gr.update(value=rv["audio_prof"]),
-                        gr.update(value=rv["output_dir"]),
                         gr.update(value=rv["seg_progress"], label=rv["seg_label"]),
-                        gr.update(value=rv["stack_text"]),
                         gr.update(value=rv["encode_log"]),
                     ]
 
@@ -655,7 +591,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
 
                 def on_start_recording():
                     if configure.is_recording:
-                        noop = [gr.update()] * 11
+                        noop = [gr.update()] * 7
                         return (
                             [gr.update(), gr.update()]   # panels
                             + noop                       # rec boxes
@@ -689,7 +625,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
 
                 def on_stop_recording():
                     if not configure.is_recording:
-                        return [gr.update()] * 15
+                        return [gr.update()] * 13
 
                     stop_cb()
 
@@ -699,11 +635,11 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         sz = utilities.fmt_bytes(os.path.getsize(last))
                         if segs > 1:
                             msg = (
-                                f"Done. {segs} segment(s).  "
-                                f"Last: {os.path.basename(last)} ({sz})"
+                                f"Done. {segs} segment(s).   "
+                                f"Last: {os.path.basename(last)} ({sz}) "
                             )
                         else:
-                            msg = f"Saved: {os.path.basename(last)} ({sz})"
+                            msg = f"Saved: {os.path.basename(last)} ({sz}) "
                     else:
                         msg = "Stopped. Check output folder."
 
@@ -714,15 +650,14 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                     return [
                         gr.update(visible=True),    # files_panel
                         gr.update(visible=False),   # rec_panel
-                        gr.update(value=rows),       # file_table
+                        gr.update(value=rows),        # file_table
                         gr.update(value=cnt),       # total_files
                         gr.update(value=sz_str),    # total_size
                         gr.update(value=fld),       # out_folder
                     ] + list(_btn_idle()) + [
                         gr.update(active=False),                       # timer
-                        gr.update(value=0, label="Segment: --"),       # seg_progress
-                        gr.update(value=" "),                           # seg_stack
-                        gr.update(value=" "),                           # encode_log
+                        gr.update(value=0, label="Segment Progress"),  # seg_progress
+                        gr.update(value="  "),                           # encode_log
                         msg,                                           # status
                     ]
 
@@ -733,7 +668,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         file_table, total_files_box, total_size_box, out_folder_box,
                         rec_start_btn, rec_pause_btn, rec_resume_btn, rec_stop_btn,
                         rec_timer,
-                        seg_progress, seg_stack_box, encode_log,
+                        seg_progress, encode_log,
                         rec_status,
                     ],
                 )
@@ -784,7 +719,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                     else:
                         msg = f"Purged {deleted}/{total} recording(s)."
                         if errs:
-                            msg += f"  Errors: {len(errs)}"
+                            msg += f"  Errors: {len(errs)} "
                     refreshed = configure.load_configuration()
                     config.update(refreshed)
                     rows, cnt, sz_str, fld = _build_file_table(config)
@@ -806,7 +741,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
 
                 def on_timer_tick():
                     if not configure.is_recording:
-                        return [gr.update()] * 10
+                        return [gr.update()] * 7
 
                     rv = _build_rec_values(config)
                     elapsed = 0
@@ -815,27 +750,24 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
 
                     return [
                         gr.update(value=rv["status"]),
-                        gr.update(value=rv["elapsed"]),
-                        gr.update(value=rv["segment"]),
+                        gr.update(value=rv["output_dir"]),
                         gr.update(value=rv["resolution"]),
                         gr.update(value=rv["fps"]),
-                        gr.update(value=rv["video_prof"]),
                         gr.update(value=rv["audio_prof"]),
                         gr.update(
                             value=rv["seg_progress"],
                             label=rv["seg_label"],
                         ),
-                        gr.update(value=rv["stack_text"]),
-                        f"Recording...  [{utilities.fmt_time(elapsed)}]",
+                        gr.update(value=rv["encode_log"]),
+                        f"Recording...  [{utilities.fmt_time(elapsed)}] ",
                     ]
 
                 rec_timer.tick(
                     fn=on_timer_tick,
                     outputs=[
-                        rec_status_box, rec_elapsed_box, rec_segment_box,
-                        rec_res_box, rec_fps_box, rec_vprof_box,
-                        rec_aprof_box,
-                        seg_progress, seg_stack_box,
+                        rec_status_box, rec_outdir_box,
+                        rec_res_box, rec_fps_box, rec_aprof_box,
+                        seg_progress, encode_log,
                         rec_status,
                     ],
                 )
@@ -1051,14 +983,13 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
 
                 gr.Markdown(
                     """
-### Desktop-264-Capture
+Desktop-264-Capture
 A x264vfw screen recording tool for Windows ~8.1-10 by [WiseMan-TimeLord](https://wisetime.rf.gd)
-- Here is the project on [GitHub](https://github.com/wiseman-timelord/Desktop-264-Capture).
-- Here are the [1.61 videos](https://www.youtube.com/playlist?list=PL7GSoMbwogC9FhbdfFyjXJcFDNSPFdg_U) created during testing.
+Here is the project on [GitHub](https://github.com/wiseman-timelord/Desktop-264-Capture).
+Here are the [1.61 videos](https://www.youtube.com/playlist?list=PL7GSoMbwogC9FhbdfFyjXJcFDNSPFdg_U) created during testing.
 """,
                     elem_classes=["about-header"],
                 )
-
                 # --- System / Debug info boxes ----------------------------
                 gr.Markdown("System Info", elem_classes=["cfg-section-label"])
 
@@ -1143,40 +1074,40 @@ A x264vfw screen recording tool for Windows ~8.1-10 by [WiseMan-TimeLord](https:
                 # --- About tab status / exit bar --------------------------
                 with gr.Row():
                     about_status = gr.Textbox(
-                        value= "About / Debug tab loaded. ",
-                        label= "Status ",
+                        value="About / Debug tab loaded.",
+                        label="Status",
                         interactive=False,
                         max_lines=1,
                         scale=20,
-                        elem_classes=[ "status-bar "],
+                        elem_classes=["status-bar"],
                     )
                     exit_about = gr.Button(
-                        "Exit Program ",
-                        variant= "secondary ",
+                        "Exit Program",
+                        variant="secondary",
                         scale=1,
-                        elem_classes=[ "exit-btn "],
+                        elem_classes=["exit-btn"],
                     )
 
                 exit_about.click(fn=lambda: exit_cb())
 
     # =======================================================================
-    # Window [X] close hook  – fires exit_cb when the browser tab /
-    # webview window is closed via the native title-bar button.
+    # Window [X] close hook – fires exit_cb when the browser tab /webview
+    # window is closed via the native title-bar button.
     # Uses a synchronous XHR so the shutdown runs before the page unloads.
     # =======================================================================
     _exit_js = """
-() => {
+    () => {
     window.addEventListener('beforeunload', function(e) {
-        // Find and click the first visible Exit Program button
-        var btns = document.querySelectorAll('button');
-        for (var i = 0; i < btns.length; i++) {
-            if (btns[i].textContent.trim() === 'Exit Program') {
-                btns[i].click();
-                break;
-            }
-        }
+    // Find and click the first visible Exit Program button
+    var btns = document.querySelectorAll('button');
+    for (var i = 0; i < btns.length; i++) {
+    if (btns[i].textContent.trim() === 'Exit Program') {
+    btns[i].click();
+    break;
+    }
+    }
     });
-}
-"""
+    }
+    """
     app.load(js=_exit_js)
     return app

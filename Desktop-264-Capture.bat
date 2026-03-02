@@ -23,7 +23,7 @@ set "VENV=.venv"
 set "PY=%VENV%\Scripts\python.exe"
 
 :MAIN_MENU
-cls
+REM cls
 echo ===============================================================================
 echo    Desktop-264-Capture: Batch Menu
 echo ===============================================================================

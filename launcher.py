@@ -108,7 +108,9 @@ def main():
     else:
         print("Desktop-264-Capture: Initialising ... ")
 
-    if not init_capture_system():
+    config = configure.load_configuration()
+
+    if not init_capture_system(config):
         print(
              "\nERROR: Capture system could not initialise.\n "
              "Run option 3 (Install) in the batch menu, then try again. "
@@ -116,8 +118,6 @@ def main():
         if debug_mode:
             input("Press ENTER to exit ... ")
         sys.exit(1)
-
-    config = configure.load_configuration()
     os.makedirs(config.get("output_path", "Output"), exist_ok=True)
 
     # Build the Gradio app
