@@ -1,8 +1,8 @@
 # Desktop-264-Capture
-Statue: Beta - Project resume was a success, program has been tested and is fully working for non-segmented videos, while issues with segmented recording are still being worked on.
+Statue: Beta - Project resume was a success, program has been tested and is fully working in text display for 0.5, but then I went on to add a GUI for version 1.00, and did some fixing/refining of the interface.
 
 ### Description
-x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~3.12.x. Batch launched with menu for, install or run. No GUI, intended to be used on secondary display, while recording primary display. Intended to have quality/optimal/HighCompression options for audio/video, having researched parameters behind simplified configuration. One would use this program for recording, gaming or application demonstration, etc, where one would want to be recording the primary display, and then editing later on the users own choice of video editor that supports, mp4 or mkv, file formats, and then after saving the final movie, when it is time to move on to creating a next video, one would be purging the raw recordings, in order to keep things tidy. 
+x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~3.12.x. Batch launched with menu for, install or run. Now with GUI since v1.02+, and text display in version 0.5. Having quality/optimal/HighCompression options for audio/video, having researched parameters behind simplified configuration. Intended to be used on secondary display, while recording primary display with default audio output plus default audio input, set through Windows, and then after recording, one would want to be editing raw footage later on the users own choice of video editor that supports, mp4 or mkv, file formats, and then after saving the final movie, when it is time to move on to creating a next video, one would be purging the raw recordings, in order to keep things tidy. 
 
 ### Media
 - The Dynamic Recording page, where we manage our files and commence recording...(v1.02)
@@ -19,7 +19,7 @@ x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~
 
 ### Output
 <details>
-<summary>The startup/initialization of main program (debug mode)...</summary>
+<summary>The startup/initialization of main program (debug mode)...(v1.01)</summary>
 
 ```
    ===============================================================================
@@ -141,12 +141,15 @@ x264 Desktop recording with multi-channel audio on Windows ~8.1-10 with Python ~
 - Python 3.7-3.12 - Claude Sonnet assessed compatibility ranges, testing on v3.12.x 
 
 ### Instructions
+Instructions are as follows...
+```
 1. Run the batch, right click and run as admin.
 2. Select install, do clean install, and enable python through firewall if you havent already. After result summary you will be returned to menu.
 3. BAck on the menu, select 1 to load the program.
-4. In the main program, configure the options including output folder and resolution, etc, then return to main menu and select 1 to start recording, and when you are finished press enter until you return to the menu.
-5. Repeat recording as required, and when you are finished, then exit the program with X on main menu.
-- After moving/renaming the program folder, I noticed it was portable, as it did not require reinstall to work correctly in new path.
+4. In the main program, configure the options in Configure page including output folder and resolution, etc, then return to Recording page, and select to start recording, and when you are finished click Stop Recording, you will thenreturn to the file managment phase.
+5. Repeat recording as required, and when you are finished, then exit the program by clicking "Exit Program".
+- I made the program to NOT over-write previous files, hence we have the purge option, that I suggest running before recording, as otherwise filenames may get confusing.
+```
 
 ### Structure
 The plan for the file structure...
@@ -164,7 +167,9 @@ The plan for the file structure...
 
 ### Development
 Project restart with Claude Sonnet...
-- Doing testing/bugfixing/improvement since v0.3, in the creation of 4 hour RimWorld videos. There have been some optimizations to, speed up saving and enable seamless segmented recording transitions. 
+- Testing and bugfixing the GUI.
+- This program is a ONE VIDEO PROJECT SHOULD AT A TIME kind of application, so I dont have much interest in fixing file naming, but it needs to be done at some point. 
+
 <details>
 <summary>Grok Encoding Research Notes (somewhat corrupted)...</summary>
    
@@ -219,6 +224,7 @@ Project restart with Claude Sonnet...
 
   ```
 </details>
+
 ### Credits
 - mss / python-mss - Ultra-fast cross-platform screen-capture library using DXGI Desktop Duplication on Windows.
 - OpenCV / opencv-python - Computer vision library used here for writing raw screen frames into an MJPG intermediate video file via VideoWriter.
