@@ -83,6 +83,19 @@ import pyaudiowpatch as pyaudio
 
 import scripts.configure as configure
 
+# ===========================================================================
+# Module-level state
+# ===========================================================================
+is_capturing        = False
+capture_thread      = None
+_pa                 = None       # PyAudio instance – kept alive for the session
+last_output_file    = None       # path of most-recently completed segment
+last_segment_count  = 0          # segments saved in the last session
+capture_start_time  = None       # time.time() when current capture started
+current_temp_video  = None       # "RAM" normally; spill path if buffer exceeded
+current_segment_num = 1          # 1-based segment counter (live)
+_segment_start_time = None       # time.time() when current segment started
+_current_video_buf  = None       # Reference to current segment's video buffer (for RAM monitoring)
 
 # ---------------------------------------------------------------------------
 # Audio format
@@ -682,7 +695,6 @@ def _mux_and_cleanup(video_buf: "_VideoBuffer",
     else:
         print(f"WARNING: expected output not found: {final_path}")
 
-
 # ===========================================================================
 # Segment capture  (inner)
 # ===========================================================================
@@ -712,6 +724,7 @@ def _capture_segment(config: dict, segment_num: int,
     import imageio_ffmpeg
 
     global current_temp_video, _segment_start_time, current_segment_num
+    global _current_video_buf
 
     current_segment_num = segment_num
 
@@ -747,6 +760,7 @@ def _capture_segment(config: dict, segment_num: int,
     # Adaptive RAM buffer limit for this segment.
     buf_limit  = _calc_buffer_limit(config)
     video_buf  = _VideoBuffer(max_bytes=buf_limit, spill_path=spill_path)
+    _current_video_buf = video_buf  # Make accessible for RAM monitoring in displays.py
 
     # current_temp_video shows "RAM" in the monitor display; if spilled the
     # display will still show "RAM" (the spill is an implementation detail).
@@ -830,6 +844,7 @@ def _capture_segment(config: dict, segment_num: int,
     except OSError as e:
         print(f"ERROR: could not launch ffmpeg for segment {segment_num}: {e}")
         video_buf.discard()
+        _current_video_buf = None  # Clear reference on error
         stop_audio.set()
         for t in audio_threads:
             t.join(timeout=5)
@@ -988,9 +1003,9 @@ def _capture_segment(config: dict, segment_num: int,
 
     current_temp_video  = None
     _segment_start_time = None
+    _current_video_buf  = None  # Clear reference when segment completes
 
     return result, video_buf, actual_lb_wav, actual_mic_wav, final
-
 
 # ===========================================================================
 # Main capture loop  (outer – manages segment pipeline)

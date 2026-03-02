@@ -286,22 +286,26 @@ def _build_file_table(config: dict):
 # ===========================================================================
 # Helper: build recording monitor values
 # ===========================================================================
+# Track last CPU/RAM update time (update every 15 seconds)
+_last_cpu_ram_update = 0
+
 def _build_rec_values(config: dict) -> dict:
     """Return a dict of all recording display values for the GUI boxes."""
+    global _last_cpu_ram_update
+    
     d = {
-        "status":         "IDLE",
-        "resolution":     "--",
-        "fps":            "--",
-        "audio_prof":     "--",
-        "segment":        "--",
+        "resolution":      "--",
+        "fps":             "--",
+        "audio_prof":      "--",
+        "cpu_usage":       configure._cached_cpu_usage,   # Use cached value
+        "ram_assignment":  configure._cached_ram_assignment,  # Use cached value
         "seg_progress":  0.0,
-        "seg_label":      "Segment: --",
-        "output_dir":     config.get("output_path", "Output"),
-        "encode_log":     "  ",
+        "seg_label":       "Segment: --",
+        "encode_log":      "   ",
     }
     if not configure.is_recording or configure.recording_start_time is None:
         return d
-
+    
     elapsed     = time.time() - configure.recording_start_time
     seg_elapsed = recorder.current_segment_elapsed()
     seg_num     = recorder.current_segment_num
@@ -311,23 +315,35 @@ def _build_rec_values(config: dict) -> dict:
     res = config["resolution"]
     ab  = configure.effective_audio_bitrate(config)
 
-    d["status"]     = "⏸ PAUSED" if configure.is_paused else "● RECORDING"
     d["resolution"] = f"{res['width']}x{res['height']}"
     d["fps"]        = str(config["fps"])
-    # Audio Profile shows bitrate only
     d["audio_prof"] = f"{ab} kbps"
-    d["output_dir"] = utilities.display_path(config.get("output_path", "Output"))
 
+    # Update CPU/RAM every 15 seconds (not every timer tick)
+    now = time.time()
+    if now - _last_cpu_ram_update >= configure.CPU_RAM_UPDATE_INTERVAL:
+        _last_cpu_ram_update = now
+        
+        # CPU Usage - update cache
+        cpu_pct = utilities.get_cpu_usage_percent()
+        if cpu_pct >= 0:
+            configure._cached_cpu_usage = f"{cpu_pct:.1f}%"
+        else:
+            configure._cached_cpu_usage = "N/A"
+        
+        # RAM Assignment - update cache
+        assigned, used, free_assigned, pct_used = utilities.get_ram_assignment_info(config)
+        if assigned >= 0:
+            configure._cached_ram_assignment = f"{free_assigned:.0f}/{assigned:.0f} MB"
+        else:
+            configure._cached_ram_assignment = "N/A"
+    
+    # Always use cached values (already set in d dict above)
     # Segment progress
     if splits_on and split_dur > 0:
         seg_pct = min(seg_elapsed / split_dur, 1.0)
-        d["segment"] = (
-            f"S{seg_num:03d}     "
-            f"[{utilities.fmt_time(seg_elapsed)} / {utilities.fmt_time(split_dur)}] "
-        )
     else:
         seg_pct = min(seg_elapsed / 3600.0, 1.0)
-        d["segment"] = f"S{seg_num:03d}   [{utilities.fmt_time(seg_elapsed)}] "
     d["seg_progress"] = seg_pct
     d["seg_label"]    = f"Segment {seg_num}:  {seg_pct * 100:.0f}%"
 
@@ -335,10 +351,10 @@ def _build_rec_values(config: dict) -> dict:
     log = []
     mux_pending = recorder.pending_mux_count
     if mux_pending > 0:
-        log.append(f"[MUX] {mux_pending} segment(s) encoding  (stream-copy + AAC)... ")
+        log.append(f"[MUX] {mux_pending} segment(s) encoding  (stream-copy + AAC)...")
     last = recorder.last_output_file
     if last:
-        log.append(f"[DONE] {os.path.basename(last)} ")
+        log.append(f"[DONE] {os.path.basename(last)}")
     d["encode_log"] = "\n".join(log)
 
     return d
@@ -363,9 +379,9 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
         with gr.Tabs() as tabs:
 
             # =======================================================================
-            # TAB 1 - RECORDING
+            # TAB 1 - FILE MANAGEMENT AND RECORDING
             # =======================================================================
-            with gr.Tab("Recording", id="tab_rec"):
+            with gr.Tab("Files/Record", id="tab_rec"):
 
                 # --- Initial table data ---
                 init_rows, init_count, init_size, init_folder = \
@@ -420,26 +436,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                 # --- Recording panel  (visible WHILE recording) ------------
                 with gr.Column(visible=False) as rec_panel:
 
-                    # Row 1: Status | Output Dir (Segment removed, Output Dir moved up)
-                    with gr.Row():
-                        rec_status_box = gr.Textbox(
-                            value="IDLE",
-                            label="Status",
-                            interactive=False,
-                            max_lines=1,
-                            elem_classes=["rec-info-box"],
-                            scale=2,
-                        )
-                        rec_outdir_box = gr.Textbox(
-                            value="--",
-                            label="Output Dir",
-                            interactive=False,
-                            max_lines=1,
-                            elem_classes=["rec-info-box"],
-                            scale=3,
-                        )
-
-                    # Row 2: Resolution | FPS | Audio Profile (Video Profile removed)
+                    # Row 1: Resolution | FPS | Audio Profile
                     with gr.Row():
                         rec_res_box = gr.Textbox(
                             value="--",
@@ -458,6 +455,23 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         rec_aprof_box = gr.Textbox(
                             value="--",
                             label="Audio Profile",
+                            interactive=False,
+                            max_lines=1,
+                            elem_classes=["rec-info-box"],
+                        )
+
+                    # Row 2: CPU Usage | RAM Assignment Free (NEW)
+                    with gr.Row():
+                        rec_cpu_box = gr.Textbox(
+                            value="--",
+                            label="CPU Usage",
+                            interactive=False,
+                            max_lines=1,
+                            elem_classes=["rec-info-box"],
+                        )
+                        rec_ram_box = gr.Textbox(
+                            value="--",
+                            label="RAM Assignment Free",
                             interactive=False,
                             max_lines=1,
                             elem_classes=["rec-info-box"],
@@ -542,21 +556,21 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                 # ----------------------------------------------------------
 
                 # All recording-panel output components in canonical order:
-                # (7 components total now)
+                # (7 components: res, fps, audio, cpu, ram, seg_progress, encode_log)
                 _rec_panel_outputs = [
-                    rec_status_box, rec_outdir_box,
                     rec_res_box, rec_fps_box, rec_aprof_box,
+                    rec_cpu_box, rec_ram_box,
                     seg_progress, encode_log,
                 ]
 
                 def _apply_rec_values(rv: dict) -> list:
                     """Map a rec-values dict to gr.update() list for the panel."""
                     return [
-                        gr.update(value=rv["status"]),
-                        gr.update(value=rv["output_dir"]),
                         gr.update(value=rv["resolution"]),
                         gr.update(value=rv["fps"]),
                         gr.update(value=rv["audio_prof"]),
+                        gr.update(value=rv["cpu_usage"]),
+                        gr.update(value=rv["ram_assignment"]),
                         gr.update(value=rv["seg_progress"], label=rv["seg_label"]),
                         gr.update(value=rv["encode_log"]),
                     ]
@@ -627,41 +641,42 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                     """
                     Generator callback so the UI stays responsive while the mux drains.
 
-                    Phase 1 (immediate): flip configure flags, hide buttons, show
-                              "Encoding..." in the rec_panel.  Timer keeps ticking
-                              (is_stopping=True branch) to show live mux progress.
-                    Phase 2 (background thread + polling): run stop_cb() – which
-                              calls recorder.stop_capture() and waits for all mux
-                              futures – in a daemon thread.  Yield no-op updates
-                              every 0.5 s so the browser connection stays alive.
-                    Phase 3 (done): hide rec_panel, show files_panel with a fresh
-                              file listing and an idle button bar.
+                    Phase 1 (immediate): flip configure flags, hide all buttons,
+                              KILL the timer, and show initial mux status.
+                              Killing the timer is critical – it prevents the timer
+                              tick from racing against the generator over the same
+                              output components (seg_progress, encode_log, rec_status).
+                    Phase 2 (background thread + polling): run stop_cb() in a daemon
+                              thread; yield progress updates every 0.5 s.
+                    Phase 3 (done): hide rec_panel, show files_panel with fresh file
+                              listing and idle button bar.
                     """
                     if not configure.is_recording and not recorder.is_capturing:
-                        yield [gr.update()] * 14
+                        yield [gr.update()] * 16
                         return
 
                     # --- Phase 1: immediate UI response ----------------------
+                    seg_n = recorder.current_segment_num   # capture before reset
                     configure.is_recording         = False
                     configure.recording_start_time = None
                     configure.is_paused            = False
                     configure.is_stopping          = True
 
                     yield [
-                        gr.update(),                             # files_panel hidden
-                        gr.update(),                             # rec_panel visible
-                        gr.update(), gr.update(),                # file_table, total_files
-                        gr.update(), gr.update(),                # total_size, out_folder
-                        gr.update(visible=False),                # start_btn
-                        gr.update(visible=False),                # pause_btn
-                        gr.update(visible=False),                # resume_btn
-                        gr.update(visible=False),                # stop_btn
-                        gr.update(active=True),                  # keep timer ON (mux display)
-                        gr.update(value=0, label="Encoding..."), # seg_progress
-                        gr.update(                               # encode_log
-                            value="[MUX] Encoding segment(s)... please wait. "
-                        ),
-                        "Encoding...",                           # rec_status
+                        gr.update(),                                    # files_panel (no change)
+                        gr.update(),                                    # rec_panel (no change)
+                        gr.update(), gr.update(),                       # file_table, total_files
+                        gr.update(), gr.update(),                       # total_size, out_folder
+                        gr.update(visible=False),                       # start_btn
+                        gr.update(visible=False),                       # pause_btn
+                        gr.update(visible=False),                       # resume_btn
+                        gr.update(visible=False),                       # stop_btn
+                        gr.update(active=False),                        # KILL TIMER – no racing
+                        gr.update(), gr.update(), gr.update(),          # res, fps, audio (no change)
+                        gr.update(), gr.update(),                       # cpu, ram (no change)
+                        gr.update(value=0, label=f"Segment {seg_n}"),  # seg_progress
+                        gr.update(value="[MUX] Encoding... please wait. "), # encode_log
+                        "Encoding...",                                  # rec_status
                     ]
 
                     # --- Phase 2: background stop + live polling --------------
@@ -677,26 +692,27 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
 
                     while not _done.is_set():
                         time.sleep(0.5)
-                        mux_n = recorder.pending_mux_count
+                        mux_n  = recorder.pending_mux_count
+                        seg_n2 = recorder.current_segment_num
                         if mux_n > 0:
-                            log = (
+                            log    = (
                                 f"[MUX] {mux_n} segment(s) encoding "
                                 f"(stream-copy + AAC)... "
                             )
-                            bar_label = f"Encoding {mux_n} segment(s)..."
-                            status    = f"Encoding...  ({mux_n} segment(s) remaining)"
+                            status = "Encoding..."
                         else:
-                            log       = "[MUX] Finalising... "
-                            bar_label = "Finalising..."
-                            status    = "Finalising..."
+                            log    = "[MUX] Finalising... "
+                            status = "Finalising..."
                         yield [
                             gr.update(), gr.update(),
                             gr.update(), gr.update(),
                             gr.update(), gr.update(),
                             gr.update(visible=False), gr.update(visible=False),
                             gr.update(visible=False), gr.update(visible=False),
-                            gr.update(active=True),
-                            gr.update(value=0, label=bar_label),
+                            gr.update(active=False),                        # timer stays OFF
+                            gr.update(), gr.update(), gr.update(),          # res, fps, audio
+                            gr.update(), gr.update(),                       # cpu, ram
+                            gr.update(value=0, label=f"Segment {seg_n2}"),# keep seg label
                             gr.update(value=log),
                             status,
                         ]
@@ -731,6 +747,8 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         gr.update(value=fld),                         # out_folder
                     ] + list(_btn_idle()) + [
                         gr.update(active=False),                      # timer OFF
+                        gr.update(), gr.update(), gr.update(),        # res, fps, audio
+                        gr.update(), gr.update(),                     # cpu, ram
                         gr.update(value=0, label="Segment Progress"), # seg_progress
                         gr.update(value="  "),                        # encode_log
                         msg,                                          # rec_status
@@ -743,6 +761,8 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         file_table, total_files_box, total_size_box, out_folder_box,
                         rec_start_btn, rec_pause_btn, rec_resume_btn, rec_stop_btn,
                         rec_timer,
+                        rec_res_box, rec_fps_box, rec_aprof_box,
+                        rec_cpu_box, rec_ram_box,
                         seg_progress, encode_log,
                         rec_status,
                     ],
@@ -815,25 +835,8 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                 )
 
                 def on_timer_tick():
-                    # Mux-draining phase: recording stopped but encoder still running
-                    if configure.is_stopping:
-                        mux_n = recorder.pending_mux_count
-                        if mux_n > 0:
-                            log = (
-                                f"[MUX] {mux_n} segment(s) encoding "
-                                f"(stream-copy + AAC)... "
-                            )
-                        else:
-                            log = "[MUX] Finalising... "
-                        return [
-                            gr.update(value="⏳ ENCODING"),
-                            gr.update(),
-                            gr.update(), gr.update(), gr.update(),
-                            gr.update(value=0, label="Encoding..."),
-                            gr.update(value=log),
-                            "Encoding...",
-                        ]
-
+                    # Timer is only active while recording (or paused).
+                    # During the stopping/mux phase the generator turns it OFF.
                     if not configure.is_recording:
                         return [gr.update()] * 8
 
@@ -848,11 +851,11 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         status_text = f"Recording...  [{utilities.fmt_time(elapsed)}] "
 
                     return [
-                        gr.update(value=rv["status"]),
-                        gr.update(value=rv["output_dir"]),
                         gr.update(value=rv["resolution"]),
                         gr.update(value=rv["fps"]),
                         gr.update(value=rv["audio_prof"]),
+                        gr.update(value=rv["cpu_usage"]),
+                        gr.update(value=rv["ram_assignment"]),
                         gr.update(
                             value=rv["seg_progress"],
                             label=rv["seg_label"],
@@ -864,8 +867,8 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                 rec_timer.tick(
                     fn=on_timer_tick,
                     outputs=[
-                        rec_status_box, rec_outdir_box,
                         rec_res_box, rec_fps_box, rec_aprof_box,
+                        rec_cpu_box, rec_ram_box,
                         seg_progress, encode_log,
                         rec_status,
                     ],
@@ -1083,9 +1086,9 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                 gr.Markdown(
                     """
 ### Desktop-264-Capture
-A x264vfw screen recording tool for Windows ~8.1-10 by [WiseMan-TimeLord](https://wisetime.rf.gd)
-- Here is the project on [GitHub](https://github.com/wiseman-timelord/Desktop-264-Capture).
-- Here are the [1.61 videos](https://www.youtube.com/playlist?list=PL7GSoMbwogC9FhbdfFyjXJcFDNSPFdg_U) created during testing.
+A x264vfw screen recording tool for Windows ~8.1-10 by [WiseMan-TimeLord](https://wisetime.rf.gd  )
+- Here is the project on [GitHub](https://github.com/wiseman-timelord/Desktop-264-Capture  ).
+- Here are the [1.61 videos](https://www.youtube.com/playlist?list=PL7GSoMbwogC9FhbdfFyjXJcFDNSPFdg_U  ) created during testing.
 """,
                     elem_classes=["about-header"],
                 )

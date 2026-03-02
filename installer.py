@@ -29,6 +29,7 @@ REQ_LIST = [
     "imageio-ffmpeg>=0.4.7",   # bundled ffmpeg binary - mux + libx264 encode
     "gradio>=4.0.0",           # Web-based GUI framework
     "pywebview>=5.0",          # Native window wrapping the Gradio web UI
+    "psutil>=5.9.0",           # For live monitoring of system stats (Python 3.12 compatible)
 ]
 
 PY_VER_MIN = (3, 7)

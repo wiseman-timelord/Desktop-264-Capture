@@ -98,10 +98,13 @@ container_format_options = ["MKV", "MP4"]
 # ---------------------------------------------------------------------------
 thread_budget_options = [25, 50, 75]   # percent
 
-# ---------------------------------------------------------------------------
-# Max RAM usage options  (% of free RAM for video buffer)
-# ---------------------------------------------------------------------------
-max_ram_usage_options = [25, 50, 75]   # percent
+# ===========================================================================
+# Live Monitoring
+# ===========================================================================
+max_ram_usage_options = [25, 50, 75]   # percent of free RAM for video buffer
+CPU_RAM_UPDATE_INTERVAL = 15.0   # Update CPU/RAM display every 15 seconds
+_cached_cpu_usage = "--"   # updated every CPU_RAM_UPDATE_INTERVAL
+_cached_ram_assignment = "--"  # updated every CPU_RAM_UPDATE_INTERVAL
 
 # ---------------------------------------------------------------------------
 # Helper: resolve effective audio bitrate

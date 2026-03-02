@@ -24,9 +24,13 @@ def _do_start_recording(config):
     configure.recording_start_time = time.time()
 
 def _do_stop_recording():
-    """Stop the current recording session and wait for mux to finish."""
-    if not configure.is_recording:
-        return
+    """Stop the current recording session and wait for mux to finish.
+
+    configure.is_recording is intentionally NOT checked here.  displays.py
+    flips that flag early (so the polling timer goes quiet) and then calls
+    this function from a background thread.  stop_capture() guards itself
+    against double-calls via its own recorder.is_capturing flag.
+    """
     stop_capture()
     configure.is_recording         = False
     configure.recording_start_time = None
