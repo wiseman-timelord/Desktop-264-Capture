@@ -983,10 +983,10 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
 
                 gr.Markdown(
                     """
-Desktop-264-Capture
+### Desktop-264-Capture
 A x264vfw screen recording tool for Windows ~8.1-10 by [WiseMan-TimeLord](https://wisetime.rf.gd)
-Here is the project on [GitHub](https://github.com/wiseman-timelord/Desktop-264-Capture).
-Here are the [1.61 videos](https://www.youtube.com/playlist?list=PL7GSoMbwogC9FhbdfFyjXJcFDNSPFdg_U) created during testing.
+- Here is the project on [GitHub](https://github.com/wiseman-timelord/Desktop-264-Capture).
+- Here are the [1.61 videos](https://www.youtube.com/playlist?list=PL7GSoMbwogC9FhbdfFyjXJcFDNSPFdg_U) created during testing.
 """,
                     elem_classes=["about-header"],
                 )
