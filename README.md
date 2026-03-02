@@ -265,12 +265,14 @@ Press ENTER to stop recording ...
 ### Structure
 The plan for the file structure...
 ```
-.\Desktop-264-Capture.bat
+.\Desktop-264-Capture.bat  (this script is not being edited in this session, but it runs the installer/launcher)
 .\installer.py   (install libraries/packages in, `.venv` and `.\data`, as well as create Json)
 .\launcher.py    (run main program, main loop, startup/shutdown functions)
 .\scripts\* (scripts for program entered through launcher).
+.\scripts\displays.py    (interfaces, displays, browser, related functions)
 .\scripts\configure.py   (globals/maps/lists, save/load json)
-.\scripts\recorder.py
+.\scripts\recorder.py   (codec/encoder/recording handling)
+.\scripts\utilities.py   (maintenance, system/utility functions)
 .\data\persistent.json   (persistent settings)
 ```
 
