@@ -13,7 +13,7 @@ x264 Desktop recording with multi-channel audio on Windows 8.1-10 with Python ~3
 
 ![recording_page](https://raw.githubusercontent.com/wiseman-timelord/Desktop-264-Capture/refs/heads/main/media/configure_page.jpg)
 
-- The About/Debug page, with some relevant information, and variables for debug...(v1.02)
+- The About/Debug page, with some relevant information, and variables for debug...(v1.08)
 
 ![recording_page](https://raw.githubusercontent.com/wiseman-timelord/Desktop-264-Capture/refs/heads/main/media/about_debug_page.jpg)
 
