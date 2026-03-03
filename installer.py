@@ -197,11 +197,12 @@ def write_default_config():
 # -------------------------------------------------------------------------------
 # Purge helpers
 # -------------------------------------------------------------------------------
-def purge_data_dir():
-    """Remove the entire .\\data\\ directory (config + any other data)."""
-    if os.path.isdir(DATA_DIR):
-        shutil.rmtree(DATA_DIR)
-        print(f"  Purged {DATA_DIR}\\")
+def purge_config_file():
+    """Remove only the persistent JSON config inside .\\data\\, leaving other
+    data-directory assets (e.g. the application icon) untouched."""
+    if os.path.isfile(CFG_PATH):
+        os.remove(CFG_PATH)
+        print(f"  Deleted {CFG_PATH}")
 
 # -------------------------------------------------------------------------------
 # Post-install: check for WebView2 runtime
@@ -277,7 +278,7 @@ def do_clean_install():
     """Option 1 - purge everything, then build from scratch."""
     print("\nPurging previous installation ...")
     destroy_old_venv()
-    purge_data_dir()
+    purge_config_file()
 
     create_venv()
     upgrade_pip()

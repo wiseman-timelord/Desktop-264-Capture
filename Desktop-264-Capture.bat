@@ -15,7 +15,7 @@ timeout /t 1 >nul
 REM Fix working Dir
 cd /d "%~dp0"
 REM ==== Static Configuration ====
-set "TITLE=Desktop-264-Record"
+set "TITLE=Desktop-264-Capture"
 title %TITLE%
 mode con cols=80 lines=30
 powershell -noprofile -command "& { $w = $Host.UI.RawUI; $b = $w.BufferSize; $b.Height = 6000; $w.BufferSize = $b; }"
