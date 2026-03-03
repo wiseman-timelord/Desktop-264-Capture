@@ -286,12 +286,13 @@ def _build_file_table(config: dict):
 # ===========================================================================
 # Helper: build recording monitor values
 # ===========================================================================
-# Track last CPU/RAM update time (update every 15 seconds)
-_last_cpu_ram_update = 0
+# Track next scheduled CPU/RAM update time.
+# Schedule: immediate on start, then +5 s, +10 s, then every 15 s.
+_next_cpu_ram_update = 0.0
 
 def _build_rec_values(config: dict) -> dict:
     """Return a dict of all recording display values for the GUI boxes."""
-    global _last_cpu_ram_update
+    global _next_cpu_ram_update
     d = {
         "resolution":      "--",
         "fps":             "--",
@@ -317,24 +318,35 @@ def _build_rec_values(config: dict) -> dict:
     d["fps"]        = str(config["fps"])
     d["audio_prof"] = f"{ab} kbps"
 
-    # Update CPU/RAM every 15 seconds (not every timer tick)
+    # Update CPU/RAM on an accelerating schedule:
+    # immediate on start → 5 s → 10 s → every 15 s after that.
     now = time.time()
-    if now - _last_cpu_ram_update >= configure.CPU_RAM_UPDATE_INTERVAL:
-        _last_cpu_ram_update = now
-        
+    if now >= _next_cpu_ram_update:
         # CPU Usage - update cache
         cpu_pct = utilities.get_cpu_usage_percent()
         if cpu_pct >= 0:
             configure._cached_cpu_usage = f"{cpu_pct:.1f}%"
         else:
             configure._cached_cpu_usage = "N/A"
-        
+
         # RAM Assignment - update cache
         assigned, used, free_assigned, pct_used = utilities.get_ram_assignment_info(config)
         if assigned >= 0:
             configure._cached_ram_assignment = f"{used:.0f}/{free_assigned:.0f} MB "
         else:
             configure._cached_ram_assignment = "N/A "
+
+        # Determine next update time based on how long recording has been running
+        elapsed_since_start = now - configure.recording_start_time
+        if elapsed_since_start < 6.0:
+            # First read (at ~0 s): next at the 5 s mark
+            _next_cpu_ram_update = configure.recording_start_time + 5.0
+        elif elapsed_since_start < 11.0:
+            # Second read (at ~5 s): next at the 10 s mark
+            _next_cpu_ram_update = configure.recording_start_time + 10.0
+        else:
+            # Third read (at ~10 s) and all subsequent reads: 15 s intervals
+            _next_cpu_ram_update = now + configure.CPU_RAM_UPDATE_INTERVAL
     
     # Always use cached values (already set in d dict above)
     # Segment progress
@@ -592,6 +604,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                     )
 
                 def on_start_recording():
+                    global _next_cpu_ram_update
                     if configure.is_recording:
                         noop = [gr.update()] * 6
                         return (
@@ -602,6 +615,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                             + ["Already recording."]     # status
                         )
 
+                    _next_cpu_ram_update = 0.0   # reset schedule for fresh recording
                     start_cb()
                     rv = _build_rec_values(config)
                     updates = _apply_rec_values(rv)
@@ -1083,29 +1097,6 @@ A x264vfw screen recording tool for Windows ~8.1-10 by [WiseMan-TimeLord](https:
 
                 with gr.Row():
                     gr.Textbox(
-                        value=sinfo.get("python_version", "?"),
-                        label="Python Version",
-                        interactive=False,
-                        max_lines=1,
-                        elem_classes=["info-box"],
-                    )
-                    gr.Textbox(
-                        value=sinfo.get("opencv", "not installed"),
-                        label="OpenCV",
-                        interactive=False,
-                        max_lines=1,
-                        elem_classes=["info-box"],
-                    )
-                    gr.Textbox(
-                        value=sinfo.get("mss", "not installed"),
-                        label="MSS (DXGI)",
-                        interactive=False,
-                        max_lines=1,
-                        elem_classes=["info-box"],
-                    )
-
-                with gr.Row():
-                    gr.Textbox(
                         value=sinfo.get("cpu_name", "?"),
                         label="CPU",
                         interactive=False,
@@ -1130,23 +1121,29 @@ A x264vfw screen recording tool for Windows ~8.1-10 by [WiseMan-TimeLord](https:
                         scale=2,
                     )
 
-                gr.Markdown("Pipeline", elem_classes=["cfg-section-label"])
                 with gr.Row():
                     gr.Textbox(
-                        value=sinfo.get("encoding", "?"),
-                        label="Encoding Pipeline",
+                        value=sinfo.get("python_version", "?"),
+                        label="Python Version",
                         interactive=False,
                         max_lines=1,
                         elem_classes=["info-box"],
-                        scale=2,
                     )
                     gr.Textbox(
-                        value=sinfo.get("segments", "?"),
-                        label="Segment Strategy",
+                        value=sinfo.get("opencv", "not installed"),
+                        label="OpenCV",
                         interactive=False,
                         max_lines=1,
                         elem_classes=["info-box"],
-                        scale=2,
+                    )
+
+                with gr.Row():
+                    gr.Textbox(
+                        value=sinfo.get("mss", "not installed"),
+                        label="MSS (DXGI)",
+                        interactive=False,
+                        max_lines=1,
+                        elem_classes=["info-box"],
                     )
                     gr.Textbox(
                         value=sinfo.get("ffmpeg_status", "Missing"),
@@ -1154,7 +1151,6 @@ A x264vfw screen recording tool for Windows ~8.1-10 by [WiseMan-TimeLord](https:
                         interactive=False,
                         max_lines=1,
                         elem_classes=["info-box"],
-                        scale=1,
                     )
 
                 # --- About tab status / exit bar --------------------------

@@ -144,9 +144,6 @@ def get_system_info() -> dict:
         "reserved":       0,
         "opencv":         "not installed",
         "mss":            "not installed",
-        "ffmpeg":         "not found",
-        "encoding":       "mss DXGI -> libx264 via ffmpeg pipe -> RAM buffer",
-        "segments":       "pipelined – mux runs in background",
     }
 
     try:
@@ -183,10 +180,10 @@ def get_system_info() -> dict:
         import imageio_ffmpeg
         ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
         info["ffmpeg_status"] = "Present" if ffmpeg_path else "Missing"
-        info["ffmpeg_path"] = ffmpeg_path if ffmpeg_path else "not found"
+        info["ffmpeg_path"]   = ffmpeg_path if ffmpeg_path else "not found"
     except Exception:
         info["ffmpeg_status"] = "Missing"
-        info["ffmpeg_path"] = "not found"
+        info["ffmpeg_path"]   = "not found"
 
     return info
 
