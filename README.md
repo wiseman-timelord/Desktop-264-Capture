@@ -168,8 +168,7 @@ The plan for the file structure...
 
 ### Development
 Project restart with Claude Sonnet...
-- Testing and bugfixing the GUI.
-- This program is a ONE VIDEO PROJECT SHOULD AT A TIME kind of application, so I dont have much interest in fixing file naming, but it needs to be done at some point. 
+- Testing and bugfixing for next/final 4 hour RimWorld movie.
 
 <details>
 <summary>Grok Encoding Research Notes (somewhat corrupted)...</summary>
