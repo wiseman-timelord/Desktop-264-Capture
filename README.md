@@ -1,5 +1,5 @@
 ![Desktop-264-Capture](https://raw.githubusercontent.com/wiseman-timelord/Desktop-264-Capture/refs/heads/main/media/project_banner.jpg)
-Statue: Beta - Project resume was a success, program has been tested and is fully working in text display for 0.5, but then I went on to add a GUI for version 1.00, and did some fixing/refining of the interface.
+Statue: Beta - Added a GUI for version 1.00, and then spent significant time improving/refining/fixing, and now its looking/running quite nice.
 
 ### Description
 x264 Desktop recording with multi-channel audio on Windows 8.1-10 with Python ~3.12.x. Batch launched with menu for, install or run. Now with GUI since v1.02+, and text display in version 0.5. Having quality/optimal/HighCompression options for audio/video, having researched parameters behind simplified configuration. Intended to be used on secondary display, while recording primary display with default audio output plus default audio input, set through Windows, and then after recording, one would want to be editing raw footage later on the users own choice of video editor that supports, mp4 or mkv, file formats, and then after saving the final movie, when it is time to move on to creating a next video, one would be purging the raw recordings, in order to keep things tidy. 
