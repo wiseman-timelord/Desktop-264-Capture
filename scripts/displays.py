@@ -1002,7 +1002,10 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                     container, out_dir, splits_str, threads_str, ram_str,
                 ):
                     if configure.is_recording:
-                        return "Cannot change settings while recording."
+                        return (
+                            "Cannot change settings while recording.",
+                            gr.update(), gr.update(), gr.update(), gr.update(),
+                        )
 
                     try:
                         w, h = res_str.split("x")
@@ -1042,7 +1045,10 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                                 os.makedirs(resolved, exist_ok=True)
                                 config["output_path"] = resolved
                             except OSError as e:
-                                return f"Error creating folder: {e}"
+                                return (
+                                    f"Error creating folder: {e}",
+                                    gr.update(), gr.update(), gr.update(), gr.update(),
+                                )
 
                     config["video_splits"] = (splits_str == "On")
 
@@ -1061,7 +1067,18 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         pass
 
                     configure.save_configuration(config)
-                    return "Configuration saved."
+
+                    # Refresh the Manage/Record file panel immediately so the
+                    # new output folder (and its file listing) is visible as
+                    # soon as the user switches back to that tab.
+                    rows, cnt, sz_str, fld = _build_file_table(config)
+                    return (
+                        "Configuration saved.",
+                        gr.update(value=fld),
+                        gr.update(value=rows),
+                        gr.update(value=cnt),
+                        gr.update(value=sz_str),
+                    )
 
                 cfg_save_btn.click(
                     fn=on_save_config,
@@ -1071,7 +1088,11 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         cfg_container, cfg_output_dir,
                         cfg_splits, cfg_threads, cfg_ram,
                     ],
-                    outputs=[cfg_status],
+                    outputs=[
+                        cfg_status,
+                        out_folder_box, file_table,
+                        total_files_box, total_size_box,
+                    ],
                 )
 
                 exit_cfg.click(fn=lambda: exit_cb())
@@ -1084,9 +1105,10 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                 gr.Markdown(
                     """
 ### Desktop-264-Capture
-A x264vfw screen recording tool for Windows ~8.1-10 by [WiseMan-TimeLord](https://wisetime.rf.gd  )
-- Here is the project on [GitHub](https://github.com/wiseman-timelord/Desktop-264-Capture  ).
-- Here are the [1.61 videos](https://www.youtube.com/playlist?list=PL7GSoMbwogC9FhbdfFyjXJcFDNSPFdg_U  ) created during testing.
+A x264vfw screen recording tool for Windows ~8.1-10 by [WiseMan-TimeLord](https://wisetime.rf.gd)...
+- To check for new versions, here is the main project on [GitHub](https://github.com/wiseman-timelord/Desktop-264-Capture).
+- If you like using the program, then be sure to donate/sponsor on, [Ko-fi](https://ko-fi.com/WisemanTimelord) or [Patreon](https://patreon.com/WisemanTimelord).
+- While developing/testing the program, I created some [Rimworld 1.61 videos](https://www.youtube.com/playlist?list=PL7GSoMbwogC9FhbdfFyjXJcFDNSPFdg_U).
 """,
                     elem_classes=["about-header"],
                 )
