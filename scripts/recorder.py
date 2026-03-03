@@ -134,19 +134,6 @@ _RAM_BUFFER_FRACTION:    float = 0.50   # default fraction of *free* RAM to use
 _THREAD_BUDGET_DEFAULT = 75
 _thread_cap: int = max(1, int((os.cpu_count() or 2) * _THREAD_BUDGET_DEFAULT / 100))
 
-# ---------------------------------------------------------------------------
-# Module-level state
-# ---------------------------------------------------------------------------
-is_capturing        = False
-capture_thread      = None
-_pa                 = None       # PyAudio instance – kept alive for the session
-last_output_file    = None       # path of most-recently completed segment
-last_segment_count  = 0          # segments saved in the last session
-capture_start_time  = None       # time.time() when current capture started
-current_temp_video  = None       # "RAM" normally; spill path if buffer exceeded
-current_segment_num = 1          # 1-based segment counter (live)
-_segment_start_time = None       # time.time() when current segment started
-
 # Mux pipeline ---------------------------------------------------------------
 pending_mux_count  = 0
 _pending_mux_lock  = threading.Lock()
@@ -627,6 +614,29 @@ def _mux(video_buf: "_VideoBuffer", loopback_wav, mic_wav,
         stderr = subprocess.PIPE,
     )
 
+    # ---- stderr drainer thread ---------------------------------------------
+    # CRITICAL: ffmpeg writes progress stats to stderr continuously.
+    # If stderr is piped but never read, the 64 KB OS pipe buffer fills and
+    # ffmpeg blocks trying to write more output.  proc.wait() then waits for
+    # ffmpeg to exit, ffmpeg never exits → deadlock.
+    # This thread drains stderr into a list so it is always available for
+    # error reporting without ever blocking ffmpeg.
+    _stderr_buf: list[bytes] = []
+
+    def _stderr_drainer():
+        try:
+            while True:
+                chunk = proc.stderr.read(4096)
+                if not chunk:
+                    break
+                _stderr_buf.append(chunk)
+        except OSError:
+            pass
+
+    stderr_thread = threading.Thread(target=_stderr_drainer, daemon=True,
+                                      name="mux-stderr")
+    stderr_thread.start()
+
     # ---- RAM feeder thread -------------------------------------------------
     # Streams in-RAM chunks to ffmpeg's stdin without blocking the caller.
     # Runs as a daemon thread; closes stdin when done so ffmpeg knows EOF.
@@ -651,14 +661,16 @@ def _mux(video_buf: "_VideoBuffer", loopback_wav, mic_wav,
     if feeder_thread is not None:
         feeder_thread.join(timeout=30)
 
+    # stderr drainer should be done since ffmpeg has exited; short join.
+    stderr_thread.join(timeout=10)
+
     # Free RAM / delete spill file now that ffmpeg has consumed the buffer.
     video_buf.discard()
 
     if ret != 0:
+        stderr_text = b"".join(_stderr_buf).decode(errors="replace")
         print(f"WARNING: ffmpeg mux failed for {os.path.basename(output_path)}.")
-        print(proc.stderr.read().decode(errors="replace")[-2000:])
-    else:
-        proc.stderr.read()   # drain stderr to avoid zombie pipe
+        print(stderr_text[-2000:])
 
 
 # ===========================================================================
