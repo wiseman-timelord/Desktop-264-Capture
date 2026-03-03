@@ -138,7 +138,8 @@ x264 Desktop recording with multi-channel audio on Windows 8.1-10 with Python ~3
 
 ### Requirements
 - Windows 8.1-10 - PClaude Sonnet assessed compatibility ranges, testing on Windows 10.
-- Python 3.7-3.12 - Claude Sonnet assessed compatibility ranges, testing on v3.12.x 
+- Python 3.7-3.12 - Claude Sonnet assessed compatibility ranges, testing on v3.12.x.
+- Powershell v5.1+ - Because of the command in the batch for re-sizing the Command Prompt.
 
 ### Instructions
 Instructions are as follows...
