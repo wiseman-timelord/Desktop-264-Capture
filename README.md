@@ -1,4 +1,4 @@
-# Desktop-264-Capture
+![Desktop-264-Capture](https://raw.githubusercontent.com/wiseman-timelord/Desktop-264-Capture/refs/heads/main/media/project_banner.jpg)
 Statue: Beta - Project resume was a success, program has been tested and is fully working in text display for 0.5, but then I went on to add a GUI for version 1.00, and did some fixing/refining of the interface.
 
 ### Description
