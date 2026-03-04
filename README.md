@@ -17,6 +17,9 @@ x264 Desktop recording with multi-channel audio on Windows 8.1-10 with Python ~3
 
 ![recording_page](https://raw.githubusercontent.com/wiseman-timelord/Desktop-264-Capture/refs/heads/main/media/about_debug_page.jpg)
 
+### Videos
+- I made a [4 hour RimWorld video](https://www.youtube.com/watch?v=kivaRE3n7qU) video using optimized 1080p settings, worked out at ~2.5GB/Hr for the files size. You can also see that at 1hr/2hr mark the transition between recorded segments, after 2 hour 15mins, I had to reload a save, so hour mark 3/4 are not synced to the hour. 
+
 ### Output
 <details>
 <summary>The startup/initialization of main program (debug mode)...(v1.01)</summary>
