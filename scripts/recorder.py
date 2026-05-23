@@ -796,23 +796,16 @@ def _capture_segment(config: dict, segment_num: int,
         else:
             print("  Microphone   : unavailable")
 
-    # ---- Start audio threads ----
+    # NOTE: Audio threads are started later, after the ffmpeg pipeline is fully
+    # ready (see below).  Starting audio here — before ffmpeg launches — creates
+    # a 200–400 ms gap between the audio clock and the first video frame.
+    # WASAPI loopback does not emit silence packets when the output device is
+    # idle, so that gap produces no WAV data; the WAV then begins at the first
+    # real sound, which the muxer places at timestamp 0 while the video is
+    # already hundreds of milliseconds in.  Result: audio permanently ahead of
+    # picture.  Keeping audio/video start times as close as possible avoids this.
     stop_audio    = threading.Event()
     audio_threads = []
-
-    if loopback_info:
-        t = threading.Thread(target=_audio_capture_thread,
-                             args=(_pa, loopback_info, lb_wav, stop_audio),
-                             daemon=True, name=f"audio-lb-s{segment_num}")
-        t.start()
-        audio_threads.append(t)
-
-    if mic_info:
-        t = threading.Thread(target=_audio_capture_thread,
-                             args=(_pa, mic_info, mic_wav, stop_audio),
-                             daemon=True, name=f"audio-mic-s{segment_num}")
-        t.start()
-        audio_threads.append(t)
 
     # ---- Launch ffmpeg: rawvideo -> libx264 -> raw H.264 on stdout --------
     #
@@ -933,6 +926,31 @@ def _capture_segment(config: dict, segment_num: int,
 
     seg_label = f"S{segment_num:03d}" if split_limit else "recording"
     print(f"Capturing {seg_label} -> {final}")
+
+    # ---- Start audio threads (deferred until ffmpeg pipeline is ready) -----
+    # Starting audio here — after ffmpeg has launched and all pipeline threads
+    # are running — keeps the audio start time within ~50 ms of the first
+    # video frame.  The brief sleep gives pyaudio time to open the WASAPI
+    # stream before the grab loop fires so the two clocks are tightly aligned.
+    if loopback_info:
+        t = threading.Thread(target=_audio_capture_thread,
+                             args=(_pa, loopback_info, lb_wav, stop_audio),
+                             daemon=True, name=f"audio-lb-s{segment_num}")
+        t.start()
+        audio_threads.append(t)
+
+    if mic_info:
+        t = threading.Thread(target=_audio_capture_thread,
+                             args=(_pa, mic_info, mic_wav, stop_audio),
+                             daemon=True, name=f"audio-mic-s{segment_num}")
+        t.start()
+        audio_threads.append(t)
+
+    # Allow WASAPI streams to open before the first frame is grabbed.
+    # 50 ms is enough for pa.open() to complete; it costs half a frame at 30 fps
+    # but eliminates the 200-400 ms gap that caused the sync drift.
+    if audio_threads:
+        time.sleep(0.05)
 
     frame_dur            = 1.0 / fps
     next_tick            = time.perf_counter()
