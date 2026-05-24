@@ -493,11 +493,29 @@ def _audio_capture_thread(pa: pyaudio.PyAudio, device_info: dict,
     """
     Stream audio from device_info directly into a WAV file one chunk at a time.
     Peak in-memory usage per device is a single AUDIO_CHUNK (8-16 KB).
+
+    WASAPI loopback sync:
+        On Windows, WASAPI loopback stream.read() blocks when no application is
+        rendering audio to the output device.  The mic captures continuously
+        (ambient noise fills every read), but the loopback thread stalls during
+        silent stretches — producing no WAV data for that period.  When audio
+        resumes (e.g. a game starts), the WAV contains no silence for the gap,
+        so all subsequent audio is shifted earlier in the container than it
+        should be, appearing out of sync with the video.
+
+        Fix: before writing each real chunk, compare the WAV's logical timeline
+        (frames_written / sample_rate) against wall-clock elapsed time.  Any gap
+        larger than one chunk duration means stream.read() was blocked.  We pad
+        the WAV with zero-byte (silence) frames to cover the missing time, keeping
+        the loopback timeline aligned with the video regardless of how long the
+        output device was idle.  The silence padding is applied only to loopback
+        streams; mic streams never block on silence so they need no correction.
     """
-    is_loopback = device_info.get("isLoopbackDevice", False)
-    channels    = int(device_info["maxOutputChannels"] if is_loopback
-                      else device_info["maxInputChannels"]) or (2 if is_loopback else 1)
-    rate        = int(device_info["defaultSampleRate"])
+    is_loopback  = device_info.get("isLoopbackDevice", False)
+    channels     = int(device_info["maxOutputChannels"] if is_loopback
+                       else device_info["maxInputChannels"]) or (2 if is_loopback else 1)
+    rate         = int(device_info["defaultSampleRate"])
+    sample_width = pa.get_sample_size(AUDIO_FORMAT)
 
     try:
         stream = pa.open(
@@ -512,17 +530,47 @@ def _audio_capture_thread(pa: pyaudio.PyAudio, device_info: dict,
         print(f"WARNING: could not open audio stream for '{device_info['name']}': {e}")
         return
 
-    wrote_any = False
+    # One chunk of digital silence: AUDIO_CHUNK frames × channels × bytes-per-sample.
+    silence_chunk    = bytes(AUDIO_CHUNK * channels * sample_width)
+    chunk_duration   = AUDIO_CHUNK / rate          # seconds of audio per chunk
+    frames_written   = 0                           # total PCM frames written to WAV
+    wrote_any        = False
+
     try:
         with wave.open(wav_path, "wb") as wf:
             wf.setnchannels(channels)
-            wf.setsampwidth(pa.get_sample_size(AUDIO_FORMAT))
+            wf.setsampwidth(sample_width)
             wf.setframerate(rate)
+
+            # t_start is set here — after the stream is open and we are about to
+            # enter the read loop — so the wall-clock reference matches the audio
+            # capture start time used by the caller (_capture_segment).
+            t_start = time.perf_counter()
 
             while not stop_event.is_set():
                 try:
                     data = stream.read(AUDIO_CHUNK, exception_on_overflow=False)
+
+                    if is_loopback:
+                        # How far the WAV timeline has progressed (seconds).
+                        elapsed_audio = frames_written / rate
+                        # How much real time has passed since we started reading.
+                        elapsed_real  = time.perf_counter() - t_start
+                        # Gap = real time ahead of WAV timeline, minus one normal
+                        # chunk duration (the chunk we are about to write accounts
+                        # for that much time already).
+                        gap = elapsed_real - elapsed_audio - chunk_duration
+                        if gap > chunk_duration:
+                            # stream.read() was blocked (no system audio).
+                            # Insert silence frames to cover the missing time so
+                            # subsequent audio lands at the correct WAV position.
+                            silent_chunks = int(gap / chunk_duration)
+                            for _ in range(silent_chunks):
+                                wf.writeframes(silence_chunk)
+                                frames_written += AUDIO_CHUNK
+
                     wf.writeframes(data)
+                    frames_written += AUDIO_CHUNK
                     wrote_any = True
                 except OSError:
                     break
