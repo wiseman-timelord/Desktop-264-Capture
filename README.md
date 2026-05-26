@@ -153,6 +153,7 @@ Instructions are as follows...
 4. In the main program, configure the options in Configure page including output folder and resolution, etc, then return to Recording page, and select to start recording, and when you are finished click Stop Recording, you will thenreturn to the file managment phase.
 5. Repeat recording as required, and when you are finished, then exit the program by clicking "Exit Program".
 - I made the program to NOT over-write previous files, hence we have the purge option, that I suggest running before recording, as otherwise filenames may get confusing.
+- Do not reconfigure windows sound/graphics devices mid-recording, or the video/audio may not mux correctly.
 ```
 
 ### Structure
