@@ -170,6 +170,8 @@ The plan for the file structure...
 - After last series of updates, the program is now becoming the polished item, no plans currently, and instead necessity more to test robustness in multiple long tests.
 
 ### Credits
+- Grok - Since 2026/08 I noticed Grok has gone Agentic, and was actually performing consistently well. This resulted in taking the program to next level effortlessly. 
+- Claude - Opus/Sonnet models have been used extensively in the production of the program.
 - mss / python-mss - Ultra-fast cross-platform screen-capture library using DXGI Desktop Duplication on Windows.
 - OpenCV / opencv-python - Computer vision library used here for writing raw screen frames into an MJPG intermediate video file via VideoWriter.
 - NumPy / numpy - Fundamental array library; used to convert raw BGRA pixel data from mss into BGR frames for OpenCV.
