@@ -391,7 +391,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
             # =======================================================================
             # TAB 1 - FILE MANAGEMENT AND RECORDING
             # =======================================================================
-            with gr.Tab("Manage/Record", id="tab_rec"):
+            with gr.Tab("Management", id="tab_rec"):
 
                 # --- Initial table data ---
                 init_rows, init_count, init_size, init_folder = \
@@ -405,7 +405,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         value=init_rows,
                         headers=["Filename", "Size", "Date"],
                         datatype=["str", "str", "str"],
-                        interactive=False,
+                        interactive=True,
                         row_count=(_MIN_TABLE_ROWS, "dynamic"),
                         column_count=(3, "fixed"),
                         elem_classes=["file-table"],
@@ -818,6 +818,44 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                     ],
                 )
 
+                def on_file_select(evt: gr.SelectData):
+                    """Play the selected recording in the OS default player."""
+                    try:
+                        row = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+                    except Exception:
+                        return "Could not read selection."
+                    rows, _, _, _ = _build_file_table(config)
+                    if row is None or row < 0 or row >= len(rows):
+                        return gr.update()
+                    name = (rows[row][0] or "").strip()
+                    if not name or name in ("- empty -", "-"):
+                        return "No file in that row."
+                    out = config.get("output_path", utilities.DEFAULT_OUTPUT)
+                    fpath = os.path.join(out, name)
+                    if not os.path.isfile(fpath):
+                        return f"File not found: {name}"
+                    try:
+                        os.startfile(fpath)  # Windows: opens associated player
+                        return f"Playing: {name}"
+                    except Exception as e:
+                        return f"Could not open file: {e}"
+
+                file_table.select(
+                    fn=on_file_select,
+                    outputs=[rec_status],
+                )
+
+                def on_file_table_edit(data):
+                    """Discard in-place edits; table is display-only."""
+                    rows, _, _, _ = _build_file_table(config)
+                    return gr.update(value=rows)
+
+                file_table.change(
+                    fn=on_file_table_edit,
+                    inputs=[file_table],
+                    outputs=[file_table],
+                )
+
                 def on_timer_tick():
                     # Timer is only active while recording (or paused).
                     # During the stopping/mux phase the timer is OFF; the
@@ -867,7 +905,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
             # =======================================================================
             # TAB 2 - CONFIGURE
             # =======================================================================
-            with gr.Tab("Configure", id="tab_cfg"):
+            with gr.Tab("Configuration", id="tab_cfg"):
 
                 # ---- Row 0: Hardware
                 #      (Display | Encoder Card | Max Threads | Max RAM)
@@ -989,14 +1027,20 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                 with gr.Row():
                     cfg_output_dir = gr.Textbox(
                         value=config.get("output_path", "Output"),
-                        label="Output Folder",
+                        label="Output Folder (click path to open in Explorer)",
                         scale=5,
+                        elem_id="cfg_output_folder",
                     )
                     cfg_browse_btn = gr.Button(
                         "Browse...",
                         variant="secondary",
                         scale=1,
                         min_width=100,
+                    )
+                    # Hidden button triggered by JS when the path field is clicked
+                    cfg_open_folder_btn = gr.Button(
+                        visible=False,
+                        elem_id="cfg_open_folder_btn",
                     )
 
                 # --- Save Settings (own row, above status bar) -------------
@@ -1198,6 +1242,34 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                     ],
                 )
 
+                def on_open_output_folder():
+                    """Open the configured output folder in Windows Explorer."""
+                    path = config.get("output_path", "Output")
+                    if not path:
+                        return "No output folder set."
+                    abs_path = path if os.path.isabs(path) else os.path.abspath(path)
+                    if not os.path.isdir(abs_path):
+                        try:
+                            os.makedirs(abs_path, exist_ok=True)
+                        except OSError as e:
+                            return f"Folder missing and could not be created: {e}"
+                    try:
+                        os.startfile(abs_path)
+                        return f"Opened: {utilities.display_path(abs_path)}"
+                    except Exception as e:
+                        # Fallback for older Windows edge cases
+                        try:
+                            import subprocess
+                            subprocess.Popen(["explorer", abs_path])
+                            return f"Opened: {utilities.display_path(abs_path)}"
+                        except Exception as e2:
+                            return f"Could not open folder: {e2}"
+
+                cfg_open_folder_btn.click(
+                    fn=on_open_output_folder,
+                    outputs=[cfg_status],
+                )
+
                 exit_cfg.click(fn=lambda: exit_cb())
 
             # =======================================================================
@@ -1314,6 +1386,30 @@ A x264vfw screen recording tool for Windows ~8.1-10 by [WiseMan-TimeLord](https:
     }
     }
     });
+
+    // Click on Configuration "Output Folder" path -> open in Explorer
+    // (triggers the hidden Gradio button #cfg_open_folder_btn)
+    function wireOutputFolderClick() {
+    var root = document.getElementById('cfg_output_folder');
+    if (!root) return;
+    var input = root.querySelector('input, textarea');
+    if (!input || input.dataset.openWired === '1') return;
+    input.dataset.openWired = '1';
+    input.style.cursor = 'pointer';
+    input.addEventListener('click', function(ev) {
+    // Don't open while the user is selecting text to copy
+    if (window.getSelection && String(window.getSelection()).length > 0) return;
+    var btn = document.getElementById('cfg_open_folder_btn');
+    if (btn) {
+    var real = btn.querySelector('button') || btn;
+    real.click();
+    }
+    });
+    }
+    wireOutputFolderClick();
+    // Re-wire after Gradio re-renders
+    var obs = new MutationObserver(function() { wireOutputFolderClick(); });
+    obs.observe(document.body, { childList: true, subtree: true });
     }
     """
     app.load(js=_exit_js)
