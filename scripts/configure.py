@@ -137,6 +137,10 @@ def get_video_params(config: dict) -> list:
 # Persistent configuration  (.\data\persistent.json)
 # ---------------------------------------------------------------------------
 PERSISTENT_PATH = os.path.join("data", "persistent.json")
+CONSTANTS_PATH  = os.path.join("data", "constants.ini")
+
+# GPU options loaded from constants.ini (populated at install / on demand)
+gpu_options: list = ["CPU (Software)"]
 
 DEFAULT_CONFIG = {
     "resolution":        {"width": 1920, "height": 1080},
@@ -150,6 +154,8 @@ DEFAULT_CONFIG = {
     "video_splits":      False,
     "thread_budget":     75,
     "max_ram_usage":     50,
+    "display_index":     1,                 # mss monitor index (1 = primary)
+    "encoder_card":      "CPU (Software)",  # selected GPU / CPU encoder target
 }
 
 
@@ -184,3 +190,49 @@ def save_configuration(config: dict):
     os.makedirs(os.path.dirname(PERSISTENT_PATH), exist_ok=True)
     with open(PERSISTENT_PATH, "w") as f:
         json.dump(config, f, indent=4)
+
+
+# ---------------------------------------------------------------------------
+# constants.ini  (hardware detected at install time)
+# ---------------------------------------------------------------------------
+def load_constants() -> None:
+    """
+    Load GPU list from data/constants.ini into the module-level gpu_options.
+    Falls back to a single CPU entry when the file is missing or empty.
+    """
+    global gpu_options
+    import configparser
+    gpu_options = ["CPU (Software)"]
+    if not os.path.isfile(CONSTANTS_PATH):
+        return
+    try:
+        cp = configparser.ConfigParser()
+        cp.read(CONSTANTS_PATH, encoding="utf-8")
+        if cp.has_section("gpus"):
+            raw = cp.get("gpus", "names", fallback="")
+            names = [n.strip() for n in raw.split("|") if n.strip()]
+            seen = set(gpu_options)
+            for n in names:
+                if n not in seen:
+                    gpu_options.append(n)
+                    seen.add(n)
+    except Exception:
+        pass
+
+
+def save_gpu_constants(gpu_names: list) -> None:
+    """
+    Write detected GPU names into data/constants.ini.
+    Called by the installer after GPU enumeration.
+    """
+    import configparser
+    os.makedirs(os.path.dirname(CONSTANTS_PATH), exist_ok=True)
+    cp = configparser.ConfigParser()
+    if os.path.isfile(CONSTANTS_PATH):
+        cp.read(CONSTANTS_PATH, encoding="utf-8")
+    if not cp.has_section("gpus"):
+        cp.add_section("gpus")
+    clean = [n.strip() for n in gpu_names if n and n.strip()]
+    cp.set("gpus", "names", " | ".join(clean))
+    with open(CONSTANTS_PATH, "w", encoding="utf-8") as f:
+        cp.write(f)

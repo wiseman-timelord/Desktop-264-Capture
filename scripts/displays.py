@@ -255,12 +255,12 @@ _shutdown_event = threading.Event()
 # ===========================================================================
 # Helper: build file table data
 # ===========================================================================
-_MIN_TABLE_ROWS = 5   # minimum rows shown; expands 1-per-file beyond this
+_MIN_TABLE_ROWS = 8   # minimum rows shown; expands 1-per-file beyond this
 
 def _build_file_table(config: dict):
     """Return (dataframe_rows, total_files_str, total_size_str, output_folder_str).
     Shows the most-recent files up to _MIN_TABLE_ROWS minimum rows.
-    Starts at 5 rows (files + empty padding), then grows 1 row per extra file.
+    Starts at 8 rows (files + empty padding), then grows 1 row per extra file.
     """
     out_path = config.get("output_path", utilities.DEFAULT_OUTPUT)
     videos   = utilities.list_videos(out_path)
@@ -399,15 +399,6 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
 
                 # --- Files panel    (visible when NOT recording) -------------
                 with gr.Column(visible=True) as files_panel:
-
-                    # Output folder box
-                    out_folder_box = gr.Textbox(
-                        value=init_folder,
-                        label="Output Folder",
-                        interactive=False,
-                        max_lines=1,
-                        elem_classes=["info-box"],
-                    )
 
                     # File table
                     file_table = gr.Dataframe(
@@ -652,7 +643,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                                listing and idle button bar.
                     """
                     if not configure.is_recording and not recorder.is_capturing:
-                        yield [gr.update()] * 18
+                        yield [gr.update()] * 17
                         return
 
                     # --- Phase 1: immediate UI response ----------------------
@@ -666,7 +657,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         gr.update(),                                    # files_panel (no change)
                         gr.update(),                                    # rec_panel   (no change)
                         gr.update(), gr.update(),                       # file_table, total_files
-                        gr.update(), gr.update(),                       # total_size, out_folder
+                        gr.update(),                                    # total_size
                         gr.update(visible=False),                       # start_btn
                         gr.update(visible=False),                       # pause_btn
                         gr.update(visible=False),                       # resume_btn
@@ -701,7 +692,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         yield [
                             gr.update(), gr.update(),                       # panels
                             gr.update(), gr.update(),                       # file_table, total_files
-                            gr.update(), gr.update(),                       # total_size, out_folder
+                            gr.update(),                                    # total_size
                             gr.update(visible=False),                       # start_btn
                             gr.update(visible=False),                       # pause_btn
                             gr.update(visible=False),                       # resume_btn
@@ -740,7 +731,6 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         gr.update(value=rows),                        # file_table
                         gr.update(value=cnt),                         # total_files
                         gr.update(value=sz_str),                      # total_size
-                        gr.update(value=fld),                         # out_folder
                     ] + list(_btn_idle()) + [                         # 4 buttons
                         gr.update(active=False),                      # timer stays OFF
                         gr.update(), gr.update(), gr.update(),        # res, fps, audio
@@ -753,7 +743,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                     fn=on_stop_recording,
                     outputs=[
                         files_panel, rec_panel,
-                        file_table, total_files_box, total_size_box, out_folder_box,
+                        file_table, total_files_box, total_size_box,
                         rec_start_btn, rec_pause_btn, rec_resume_btn, rec_stop_btn,
                         rec_timer,
                         rec_res_box, rec_fps_box, rec_aprof_box,
@@ -801,7 +791,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
 
                 def on_purge():
                     if configure.is_recording:
-                        return [gr.update()] * 4 + ["Cannot purge while recording."]
+                        return [gr.update()] * 3 + ["Cannot purge while recording."]
                     out = config.get("output_path", utilities.DEFAULT_OUTPUT)
                     deleted, total, errs = utilities.purge_recordings(out)
                     if total == 0:
@@ -817,7 +807,6 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         gr.update(value=rows),
                         gr.update(value=cnt),
                         gr.update(value=sz_str),
-                        gr.update(value=fld),
                         msg,
                     ]
 
@@ -825,7 +814,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                     fn=on_purge,
                     outputs=[
                         file_table, total_files_box, total_size_box,
-                        out_folder_box, rec_status,
+                        rec_status,
                     ],
                 )
 
@@ -872,12 +861,64 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                     ],
                 )
 
+
                 exit_rec.click(fn=lambda: exit_cb())
 
             # =======================================================================
             # TAB 2 - CONFIGURE
             # =======================================================================
             with gr.Tab("Configure", id="tab_cfg"):
+
+                # ---- Row 0: Hardware
+                #      (Display | Encoder Card | Max Threads | Max RAM)
+                gr.Markdown("Hardware", elem_classes=["cfg-section-label"])
+                with gr.Row():
+                    # Detect displays at UI build time
+                    _disp_list = utilities.detect_displays()
+                    _disp_labels = [d["label"] for d in _disp_list] or [
+                        "Monitor 1: 1920x1080 (Primary)"
+                    ]
+                    _saved_disp_idx = config.get("display_index", 1)
+                    _disp_value = _disp_labels[0]
+                    for d in _disp_list:
+                        if d["index"] == _saved_disp_idx:
+                            _disp_value = d["label"]
+                            break
+
+                    cfg_display = gr.Dropdown(
+                        choices=_disp_labels,
+                        value=_disp_value,
+                        label="Display Selection",
+                    )
+
+                    # GPU / encoder card options from constants.ini
+                    _gpu_choices = list(configure.gpu_options) or [
+                        "CPU (Software)"
+                    ]
+                    _saved_gpu = config.get("encoder_card", "CPU (Software)")
+                    if _saved_gpu not in _gpu_choices:
+                        _gpu_choices.append(_saved_gpu)
+                    cfg_encoder = gr.Dropdown(
+                        choices=_gpu_choices,
+                        value=_saved_gpu if _saved_gpu in _gpu_choices
+                              else _gpu_choices[0],
+                        label="Muxer / Encoder Card",
+                    )
+
+                    cfg_threads = gr.Dropdown(
+                        choices=[
+                            f"{t}%" for t in configure.thread_budget_options
+                        ],
+                        value=f"{config.get('thread_budget', 75)}%",
+                        label="Max Threads Used",
+                    )
+                    cfg_ram = gr.Dropdown(
+                        choices=[
+                            f"{r}%" for r in configure.max_ram_usage_options
+                        ],
+                        value=f"{config.get('max_ram_usage', 50)}%",
+                        label="Max RAM Usage",
+                    )
 
                 # ---- Row 1: Video  (Resolution | FPS | Video Compression)
                 gr.Markdown("Video", elem_classes=["cfg-section-label"])
@@ -928,7 +969,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         label="Audio Compression",
                     )
 
-                # ---- Row 3: Output  (Container | Output Dir)
+                # ---- Row 3: Output  (Container | Splits | Folder + Browse)
                 gr.Markdown("Output", elem_classes=["cfg-section-label"])
                 with gr.Row():
                     cfg_container = gr.Dropdown(
@@ -936,12 +977,6 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         value=config.get("container_format", "MKV"),
                         label="Container Format",
                     )
-                    cfg_output_dir = gr.Textbox(
-                        value=config.get("output_path", "Output"),
-                        label="Output Directory",
-                        scale=2,
-                    )
-
                     cfg_splits = gr.Dropdown(
                         choices=["Off", "On"],
                         value=(
@@ -951,26 +986,26 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         label="1-Hour Video Splits",
                     )
 
-                # ---- Row 4: Resources
-                #      (1Hr Splits | Max Threads | Max RAM)
-                gr.Markdown(
-                    "RESOURCES",
-                    elem_classes=["cfg-section-label"],
-                )
                 with gr.Row():
-                    cfg_threads = gr.Dropdown(
-                        choices=[
-                            f"{t}%" for t in configure.thread_budget_options
-                        ],
-                        value=f"{config.get('thread_budget', 75)}%",
-                        label="Max Threads Used",
+                    cfg_output_dir = gr.Textbox(
+                        value=config.get("output_path", "Output"),
+                        label="Output Folder",
+                        scale=5,
                     )
-                    cfg_ram = gr.Dropdown(
-                        choices=[
-                            f"{r}%" for r in configure.max_ram_usage_options
-                        ],
-                        value=f"{config.get('max_ram_usage', 50)}%",
-                        label="Max RAM Usage",
+                    cfg_browse_btn = gr.Button(
+                        "Browse...",
+                        variant="secondary",
+                        scale=1,
+                        min_width=100,
+                    )
+
+                # --- Save Settings (own row, above status bar) -------------
+                with gr.Row():
+                    cfg_save_btn = gr.Button(
+                        "\U0001F4BE  Save Settings",
+                        variant="secondary",
+                        elem_classes=["save-btn"],
+                        scale=1,
                     )
 
                 # --- Status bar -------------------------------------------
@@ -983,21 +1018,17 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         scale=20,
                         elem_classes=["status-bar"],
                     )
-                    with gr.Column(scale=1, min_width=130):
-                        cfg_save_btn = gr.Button(
-                            "\U0001F4BE  Save Settings",
-                            variant="secondary",
-                            elem_classes=["save-btn"],
-                        )
-                        exit_cfg = gr.Button(
-                            "Exit Program",
-                            variant="secondary",
-                            elem_classes=["exit-btn"],
-                        )
+                    exit_cfg = gr.Button(
+                        "Exit Program",
+                        variant="secondary",
+                        scale=1,
+                        elem_classes=["exit-btn"],
+                    )
 
                 # --- Configure callbacks ----------------------------------
 
                 def on_save_config(
+                    disp_label, encoder_card,
                     res_str, fps_str, v_comp, a_br_str, a_comp,
                     container, out_dir, splits_str, threads_str, ram_str,
                 ):
@@ -1006,6 +1037,15 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                             "Cannot change settings while recording.",
                             gr.update(), gr.update(), gr.update(), gr.update(),
                         )
+
+                    # Hardware: display index
+                    config["display_index"] = utilities.display_index_from_label(
+                        disp_label or ""
+                    )
+
+                    # Hardware: encoder / muxer card
+                    if encoder_card:
+                        config["encoder_card"] = encoder_card
 
                     try:
                         w, h = res_str.split("x")
@@ -1074,7 +1114,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                     rows, cnt, sz_str, fld = _build_file_table(config)
                     return (
                         "Configuration saved.",
-                        gr.update(value=fld),
+                        gr.update(value=config.get("output_path", "Output")),
                         gr.update(value=rows),
                         gr.update(value=cnt),
                         gr.update(value=sz_str),
@@ -1083,6 +1123,7 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                 cfg_save_btn.click(
                     fn=on_save_config,
                     inputs=[
+                        cfg_display, cfg_encoder,
                         cfg_resolution, cfg_fps, cfg_video_comp,
                         cfg_audio_br, cfg_audio_comp,
                         cfg_container, cfg_output_dir,
@@ -1090,8 +1131,70 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                     ],
                     outputs=[
                         cfg_status,
-                        out_folder_box, file_table,
+                        cfg_output_dir, file_table,
                         total_files_box, total_size_box,
+                    ],
+                )
+
+                def on_browse_output():
+                    """Open a native folder dialog and set the output path."""
+                    if configure.is_recording:
+                        return (
+                            gr.update(), gr.update(), gr.update(), gr.update(),
+                            "Cannot change output folder while recording.",
+                        )
+                    try:
+                        import tkinter as tk
+                        from tkinter import filedialog
+                        root = tk.Tk()
+                        root.withdraw()
+                        root.attributes("-topmost", True)
+                        initial = config.get("output_path", "Output")
+                        if not os.path.isabs(initial):
+                            initial = os.path.abspath(initial)
+                        if not os.path.isdir(initial):
+                            initial = os.path.abspath(".")
+                        chosen = filedialog.askdirectory(
+                            title="Select Output Folder",
+                            initialdir=initial,
+                        )
+                        root.destroy()
+                    except Exception as e:
+                        return (
+                            gr.update(), gr.update(), gr.update(), gr.update(),
+                            f"Browse failed: {e}",
+                        )
+
+                    if not chosen:
+                        return (
+                            gr.update(), gr.update(), gr.update(), gr.update(),
+                            "Browse cancelled.",
+                        )
+
+                    try:
+                        os.makedirs(chosen, exist_ok=True)
+                    except OSError as e:
+                        return (
+                            gr.update(), gr.update(), gr.update(), gr.update(),
+                            f"Cannot use folder: {e}",
+                        )
+
+                    config["output_path"] = chosen
+                    configure.save_configuration(config)
+                    rows, cnt, sz_str, fld = _build_file_table(config)
+                    return (
+                        gr.update(value=chosen),
+                        gr.update(value=rows),
+                        gr.update(value=cnt),
+                        gr.update(value=sz_str),
+                        f"Output folder set: {fld}",
+                    )
+
+                cfg_browse_btn.click(
+                    fn=on_browse_output,
+                    outputs=[
+                        cfg_output_dir, file_table, total_files_box,
+                        total_size_box, cfg_status,
                     ],
                 )
 

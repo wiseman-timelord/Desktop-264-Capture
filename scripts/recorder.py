@@ -1005,7 +1005,11 @@ def _capture_segment(config: dict, segment_num: int,
     _segment_start_time  = time.time()
     result               = "done"
     frames_dropped       = 0
-    monitor              = sct.monitors[1]   # re-queried each segment
+    # Use configured display index (1 = primary by default). Clamp to valid range.
+    disp_idx = int(config.get("display_index", 1))
+    if disp_idx < 1 or disp_idx >= len(sct.monitors):
+        disp_idx = 1
+    monitor = sct.monitors[disp_idx]
 
     # ---- Frame grab loop --------------------------------------------------
     while is_capturing:

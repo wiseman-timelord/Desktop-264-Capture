@@ -189,6 +189,8 @@ def write_default_config():
         "video_splits": False,
         "thread_budget": 75,
         "max_ram_usage": 50,
+        "display_index": 1,
+        "encoder_card": "CPU (Software)",
     }
     with open(CFG_PATH, "w") as f:
         json.dump(cfg, f, indent=4)
@@ -271,6 +273,78 @@ def verify_and_summary() -> bool:
     print("=" * 60)
     return all_ok
 
+
+def detect_and_write_gpu_constants():
+    """
+    Enumerate GPUs and write them to data/constants.ini so the main program
+    can offer them in the Muxer/Encoder Card dropdown.
+    Uses PowerShell Get-CimInstance with a WMIC fallback.
+    """
+    print("\nDetecting GPUs for constants.ini ...")
+    names = []
+    skip_keywords = (
+        "remote", "microsoft basic", "virtual", "mirror", "rdp",
+        "teamviewer", "vnc", "parsec",
+    )
+    try:
+        cmd = [
+            "powershell", "-NoProfile", "-Command",
+            "Get-CimInstance Win32_VideoController | "
+            "Select-Object -ExpandProperty Name"
+        ]
+        out = subprocess.check_output(
+            cmd, text=True, timeout=15, stderr=subprocess.DEVNULL
+        )
+        for line in out.splitlines():
+            name = line.strip()
+            if not name:
+                continue
+            low = name.lower()
+            if any(k in low for k in skip_keywords):
+                continue
+            if name not in names:
+                names.append(name)
+    except Exception:
+        pass
+
+    if not names:
+        try:
+            out = subprocess.check_output(
+                ["wmic", "path", "win32_VideoController", "get", "name"],
+                text=True, timeout=15, stderr=subprocess.DEVNULL
+            )
+            for line in out.splitlines():
+                name = line.strip()
+                if not name or name.lower() == "name":
+                    continue
+                low = name.lower()
+                if any(k in low for k in skip_keywords):
+                    continue
+                if name not in names:
+                    names.append(name)
+        except Exception:
+            pass
+
+    if names:
+        for n in names:
+            print(f"  found GPU : {n}")
+    else:
+        print("  No discrete/integrated GPUs detected (will offer CPU only).")
+
+    import configparser
+    const_path = os.path.join(DATA_DIR, "constants.ini")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    cp = configparser.ConfigParser()
+    if os.path.isfile(const_path):
+        cp.read(const_path, encoding="utf-8")
+    if not cp.has_section("gpus"):
+        cp.add_section("gpus")
+    cp.set("gpus", "names", " | ".join(names) if names else "")
+    with open(const_path, "w", encoding="utf-8") as f:
+        cp.write(f)
+    print(f"  wrote    {const_path}")
+
+
 # -------------------------------------------------------------------------------
 # Install paths
 # -------------------------------------------------------------------------------
@@ -285,6 +359,7 @@ def do_clean_install():
     install_requirements()
     make_dirs()
     write_default_config()
+    detect_and_write_gpu_constants()
 
 
 def do_normal_install(state: dict):
@@ -298,6 +373,7 @@ def do_normal_install(state: dict):
     ensure_requirements(state)
     make_dirs()
     write_default_config()
+    detect_and_write_gpu_constants()
 
 # -------------------------------------------------------------------------------
 # Main

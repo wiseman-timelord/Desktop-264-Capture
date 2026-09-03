@@ -62,7 +62,7 @@ def _do_exit():
 # ---------------------------------------------------------------------------
 
 _GRADIO_HOST = "127.0.0.1"
-_GRADIO_PORT = 7860
+_GRADIO_PORT = 7833
 
 # Portable icon path - relative to script location for consistency
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -237,6 +237,8 @@ def main():
         pass  # Not on Windows or older Windows version
 
     config = configure.load_configuration()
+    # Load GPU list from constants.ini (written by the installer)
+    configure.load_constants()
 
     if not init_capture_system(config):
         print(
