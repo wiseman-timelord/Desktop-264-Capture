@@ -204,20 +204,52 @@ CUSTOM_CSS = """
     padding: 0 8px !important;
 }
 .save-btn:hover { background: #ea6f0e !important; }
-/* Exit button — force red regardless of theme */
+/* Exit button — force red; double-height to align with Status bar */
 .exit-btn {
     min-width: 110px;
     background: #b91c1c !important;
     color: #ffffff !important;
     font-weight: 700 !important;
-    min-height: 0 !important;
-    height: 38px !important;
-    line-height: 1 !important;
-    white-space: nowrap !important;
+    min-height: 64px !important;
+    height: 64px !important;
+    line-height: 1.2 !important;
+    white-space: normal !important;
     overflow: hidden !important;
-    padding: 0 8px !important;
+    padding: 8px 12px !important;
+    align-self: stretch !important;
 }
 .exit-btn:hover { background: #dc2626 !important; }
+/* Output-folder path display (read-only, non-clickable) */
+#cfg_output_folder input,
+#cfg_output_folder textarea {
+    background: #222 !important;
+    color: #ccc !important;
+    border: 1px solid #3a3a3a !important;
+    cursor: default !important;
+    font-family: Consolas, 'Courier New', monospace !important;
+}
+/* Label-style button that opens the folder in Explorer */
+.folder-open-label {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: #888 !important;
+    font-size: 0.78rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.04em !important;
+    text-align: left !important;
+    padding: 0 0 2px 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    cursor: pointer !important;
+    justify-content: flex-start !important;
+}
+.folder-open-label:hover {
+    color: #7ab4f5 !important;
+    text-decoration: underline !important;
+    background: transparent !important;
+}
 /* ---- Config section labels ---- */
 .cfg-section-label p {
     color: #888 !important;
@@ -1024,10 +1056,18 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         label="1-Hour Video Splits",
                     )
 
+                # Label acts as the "open folder" control; path box is display-only
+                cfg_open_folder_btn = gr.Button(
+                    "Output Folder (click to open)",
+                    elem_classes=["folder-open-label"],
+                    size="sm",
+                )
                 with gr.Row():
                     cfg_output_dir = gr.Textbox(
                         value=config.get("output_path", "Output"),
-                        label="Output Folder (click path to open in Explorer)",
+                        show_label=False,
+                        interactive=False,
+                        max_lines=1,
                         scale=5,
                         elem_id="cfg_output_folder",
                     )
@@ -1036,11 +1076,6 @@ def build_interface(config: dict, start_cb, stop_cb, exit_cb):
                         variant="secondary",
                         scale=1,
                         min_width=100,
-                    )
-                    # Hidden button triggered by JS when the path field is clicked
-                    cfg_open_folder_btn = gr.Button(
-                        visible=False,
-                        elem_id="cfg_open_folder_btn",
                     )
 
                 # --- Save Settings (own row, above status bar) -------------
@@ -1386,30 +1421,6 @@ A x264vfw screen recording tool for Windows ~8.1-10 by [WiseMan-TimeLord](https:
     }
     }
     });
-
-    // Click on Configuration "Output Folder" path -> open in Explorer
-    // (triggers the hidden Gradio button #cfg_open_folder_btn)
-    function wireOutputFolderClick() {
-    var root = document.getElementById('cfg_output_folder');
-    if (!root) return;
-    var input = root.querySelector('input, textarea');
-    if (!input || input.dataset.openWired === '1') return;
-    input.dataset.openWired = '1';
-    input.style.cursor = 'pointer';
-    input.addEventListener('click', function(ev) {
-    // Don't open while the user is selecting text to copy
-    if (window.getSelection && String(window.getSelection()).length > 0) return;
-    var btn = document.getElementById('cfg_open_folder_btn');
-    if (btn) {
-    var real = btn.querySelector('button') || btn;
-    real.click();
-    }
-    });
-    }
-    wireOutputFolderClick();
-    // Re-wire after Gradio re-renders
-    var obs = new MutationObserver(function() { wireOutputFolderClick(); });
-    obs.observe(document.body, { childList: true, subtree: true });
     }
     """
     app.load(js=_exit_js)
